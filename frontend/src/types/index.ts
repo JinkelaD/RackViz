@@ -9,6 +9,13 @@ export interface DeviceModel {
 
 export type DeviceType = 'server' | 'switch' | 'router' | 'storage' | 'pdu' | 'patch';
 
+export interface Room {
+  id: number;
+  name: string;
+  location: string;
+  sort_order: number;
+}
+
 export interface Rack {
   id: number;
   name: string;
@@ -16,6 +23,8 @@ export interface Rack {
   row: number;
   col: number;
   view: 'front' | 'rear';
+  sort_order: number;
+  room_id: number | null;
 }
 
 export interface Device {
@@ -27,6 +36,9 @@ export interface Device {
   end_u: number | null;
   ip_addresses: string;
   serial_no: string;
+  asset_no: string;
+  department: string;
+  owner: string;
   function: string;
   purchase_date: string | null;
   warranty_expire: string | null;

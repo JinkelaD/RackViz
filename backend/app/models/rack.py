@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, ForeignKey
 from ..core.database import Base
 
 class Rack(Base):
@@ -10,3 +10,5 @@ class Rack(Base):
     row = Column(Integer, default=0)
     col = Column(Integer, default=0)
     view = Column(String(10), default="front")
+    sort_order = Column(Integer, default=0)
+    room_id = Column(Integer, ForeignKey("rooms.id"), nullable=True, default=None)

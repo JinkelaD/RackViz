@@ -23,6 +23,16 @@ export const deviceModelApi = {
     request<void>(`/device-models/${id}`, { method: 'DELETE' }),
 };
 
+export const roomApi = {
+  list: () => request<import('../types').Room[]>('/rooms/'),
+  create: (data: Partial<import('../types').Room>) =>
+    request<import('../types').Room>('/rooms/', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: number, data: Partial<import('../types').Room>) =>
+    request<import('../types').Room>(`/rooms/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (id: number) =>
+    request<void>(`/rooms/${id}`, { method: 'DELETE' }),
+};
+
 export const rackApi = {
   list: () => request<import('../types').Rack[]>('/racks/'),
   create: (data: Partial<import('../types').Rack>) =>

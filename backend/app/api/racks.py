@@ -9,7 +9,7 @@ router = APIRouter(prefix="/racks", tags=["racks"])
 
 @router.get("/", response_model=List[RackResponse])
 def list_racks(db: Session = Depends(get_db)):
-    return db.query(Rack).order_by(Rack.row, Rack.col).all()
+    return db.query(Rack).order_by(Rack.view, Rack.sort_order).all()
 
 @router.post("/", response_model=RackResponse, status_code=201)
 def create_rack(data: RackCreate, db: Session = Depends(get_db)):

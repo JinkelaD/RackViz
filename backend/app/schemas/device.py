@@ -10,6 +10,9 @@ class DeviceBase(BaseModel):
     end_u: Optional[int] = None
     ip_addresses: str = ""
     serial_no: str = ""
+    asset_no: str = ""
+    department: str = ""
+    owner: str = ""
     function: str = ""
     purchase_date: Optional[date] = None
     warranty_expire: Optional[date] = None
@@ -27,6 +30,9 @@ class DeviceUpdate(BaseModel):
     end_u: Optional[int] = None
     ip_addresses: Optional[str] = None
     serial_no: Optional[str] = None
+    asset_no: Optional[str] = None
+    department: Optional[str] = None
+    owner: Optional[str] = None
     function: Optional[str] = None
     purchase_date: Optional[date] = None
     warranty_expire: Optional[date] = None

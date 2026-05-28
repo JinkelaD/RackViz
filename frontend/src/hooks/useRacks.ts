@@ -23,10 +23,14 @@ export function useRacks() {
     refresh();
   };
 
+  const updateQuiet = useCallback(async (id: number, data: Partial<Rack>) => {
+    return rackApi.update(id, data);
+  }, []);
+
   const remove = async (id: number) => {
     await rackApi.delete(id);
     refresh();
   };
 
-  return { racks, loading, refresh, create, update, remove };
+  return { racks, loading, refresh, create, update, updateQuiet, remove };
 }
