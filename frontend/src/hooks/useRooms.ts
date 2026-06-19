@@ -1,32 +1,13 @@
-import { useState, useEffect, useCallback } from 'react';
 import { Room } from '../types';
-import { roomApi } from '../api/client';
+import * as api from '../tauri-api';
+import { useApiList } from './useApiList';
 
 export function useRooms() {
-  const [rooms, setRooms] = useState<Room[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const refresh = useCallback(() => {
-    setLoading(true);
-    roomApi.list().then(setRooms).finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { refresh(); }, [refresh]);
-
-  const create = async (data: Partial<Room>) => {
-    await roomApi.create(data);
-    refresh();
-  };
-
-  const update = async (id: number, data: Partial<Room>) => {
-    await roomApi.update(id, data);
-    refresh();
-  };
-
-  const remove = async (id: number) => {
-    await roomApi.delete(id);
-    refresh();
-  };
-
+  const { items: rooms, loading, refresh, create, update, remove } = useApiList<Room>(
+    () => api.listRooms() as Promise<Room[]>,
+    (data) => api.createRoom(data as api.RoomCreate) as Promise<Room>,
+    (id, data) => api.updateRoom(id, data as api.RoomUpdate) as Promise<Room | null>,
+    (id) => api.deleteRoom(id),
+  );
   return { rooms, loading, refresh, create, update, remove };
 }

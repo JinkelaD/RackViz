@@ -7,7 +7,7 @@ export interface DeviceModel {
   power_watt: number;
 }
 
-export type DeviceType = 'server' | 'switch' | 'router' | 'storage' | 'pdu' | 'patch';
+export type DeviceType = 'server' | 'switch' | 'router' | 'storage' | 'security';
 
 export interface Room {
   id: number;

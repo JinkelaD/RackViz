@@ -1,12 +1,13 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { Modal, Form, Input, Button, Select } from 'antd';
+import { Modal, Form, Input, Button, Select, App } from 'antd';
 import { useRacks } from '../hooks/useRacks';
 import { useDevices } from '../hooks/useDevices';
 import { useDeviceModels } from '../hooks/useDeviceModels';
-import { useRooms } from '../hooks/useRooms';
 import { Rack, Device, DeviceModel, ViewMode, Room } from '../types';
+import { DEVICE_TYPE_LABELS } from '../constants/labels';
 import StatusBar, { RoomTabs } from '../components/StatusBar';
+import DeviceDetailPanel from '../components/DeviceDetailPanel';
 
 interface ContextType {
   view: ViewMode;
@@ -33,15 +34,6 @@ interface ContextType {
   startEditRoom: (id: number, name: string) => void;
   updateRoom: (id: number, data: Partial<Room>) => Promise<void>;
 }
-
-const DEVICE_TYPE_LABELS: Record<string, string> = {
-  server: '服务器',
-  switch: '交换机',
-  router: '路由器',
-  storage: '存储',
-  pdu: 'PDU',
-  patch: '配线架',
-};
 
 function findAvailableSlot(
   targetU: number,
@@ -103,16 +95,17 @@ function findAvailableSlot(
 
 export default function RackView() {
   const ctx = useOutletContext<ContextType>();
-  const { view, zoom, onZoomIn, onZoomOut, onZoomReset, searchQuery, onSearchChange, showAddRack, setShowAddRack, selectedRoomId } = ctx;
+  const { view, zoom, onZoomIn, onZoomOut, onZoomReset, searchQuery, onSearchChange, showAddRack, setShowAddRack, selectedRoomId, rooms } = ctx;
   const { racks, create: createRack, remove: removeRack, update: updateRack, updateQuiet: updateRackQuiet, refresh: refreshRacks } = useRacks();
   const { devices, update, remove } = useDevices();
   const { models } = useDeviceModels();
-  const { rooms } = useRooms();
+  const { modal, message } = App.useApp();
 
   const [selectedRackId, setSelectedRackId] = useState<number | null>(null);
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [draggingDevice, setDraggingDevice] = useState<Device | null>(null);
-  const [dropTarget, setDropTarget] = useState<{ rackId: number; u: number } | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ rackId: number; u: number; deviceHeight: number } | null>(null);
+  const [dragOverStock, setDragOverStock] = useState(false);
   const [newRackName, setNewRackName] = useState('');
   const [newRackHeight, setNewRackHeight] = useState(42);
   const [newRackRoomId, setNewRackRoomId] = useState<number | null>(null);
@@ -235,37 +228,26 @@ export default function RackView() {
     setEditingRack(null);
   };
 
-  const handleRemoveDevice = async () => {
-    if (selectedDevice) {
-      await remove(selectedDevice.id);
-      setSelectedDevice(null);
-    }
-  };
-
-  const handleUnassignDevice = async () => {
-    if (selectedDevice) {
-      await update(selectedDevice.id, {
-        rack_id: null,
-        start_u: null,
-        end_u: null,
-      });
-      setSelectedDevice(null);
-    }
-  };
-
-  const handleDragStart = useCallback((device: Device) => {
+  const handleDragStart = useCallback((e: React.DragEvent, device: Device) => {
+    e.dataTransfer.setData('text/plain', String(device.id));
+    e.dataTransfer.effectAllowed = 'move';
     setDraggingDevice(device);
   }, []);
 
   const handleDragEnd = useCallback(() => {
     setDraggingDevice(null);
     setDropTarget(null);
+    setDragOverStock(false);
   }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent, rackId: number, u: number) => {
     e.preventDefault();
-    setDropTarget({ rackId, u });
-  }, []);
+    const model = draggingDevice ? models.find(m => m.id === draggingDevice.device_model_id) : null;
+    const deviceHeight = draggingDevice?.end_u != null && draggingDevice?.start_u != null
+      ? draggingDevice.end_u - draggingDevice.start_u + 1
+      : (model?.height_u || 1);
+    setDropTarget({ rackId, u, deviceHeight });
+  }, [draggingDevice, models]);
 
   const handleDragLeave = useCallback(() => {
     setDropTarget(null);
@@ -273,6 +255,7 @@ export default function RackView() {
 
   const handleDrop = useCallback(async (e: React.DragEvent, rackId: number, u: number) => {
     e.preventDefault();
+    e.stopPropagation();
 
     const rack = racks.find(r => r.id === rackId);
     if (!rack || !draggingDevice) {
@@ -280,15 +263,24 @@ export default function RackView() {
       return;
     }
 
+    const deviceModel = getDeviceModel(draggingDevice.device_model_id);
     const deviceHeight = draggingDevice.end_u != null && draggingDevice.start_u != null
       ? draggingDevice.end_u - draggingDevice.start_u + 1
-      : (getDeviceModel(draggingDevice.device_model_id)?.height_u || 1);
+      : (deviceModel?.height_u || 1);
 
-    const existingRackDevices = getDevicesForRack(rackId).filter(d => d.id !== draggingDevice.id)
+    if (!deviceModel) {
+      message.warning(`设备「${draggingDevice.name}」未关联型号，默认占用 1U`);
+    }
+
+    const existingDevices = getDevicesForRack(rackId)
+      .filter(d => d.id !== draggingDevice.id)
       .map(d => ({ start_u: d.start_u, end_u: d.end_u, id: d.id }));
 
-    const slot = findAvailableSlot(u, deviceHeight, rack.height_u, existingRackDevices);
+    const slot = findAvailableSlot(u, deviceHeight, rack.height_u, existingDevices);
     if (!slot) {
+      message.warning(
+        `机柜「${rack.name}」U 位不足：设备需要 ${deviceHeight}U，但目标位置附近没有足够连续空位。`
+      );
       handleDragEnd();
       return;
     }
@@ -297,10 +289,32 @@ export default function RackView() {
       rack_id: rackId,
       start_u: slot.startU,
       end_u: slot.endU,
+      ...(draggingDevice.status === 'unconfigured' ? { status: 'offline' as const } : {}),
     });
 
     handleDragEnd();
-  }, [draggingDevice, racks, update, handleDragEnd, getDevicesForRack, getDeviceModel]);
+  }, [draggingDevice, racks, update, handleDragEnd, getDevicesForRack, getDeviceModel, message]);
+
+  const handleStockDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    if (draggingDevice?.rack_id != null) {
+      e.dataTransfer.dropEffect = 'move';
+      setDragOverStock(true);
+    }
+  }, [draggingDevice]);
+
+  const handleStockDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOverStock(false);
+    if (draggingDevice && draggingDevice.rack_id != null) {
+      await update(draggingDevice.id, {
+        rack_id: null,
+        start_u: null,
+        end_u: null,
+      });
+    }
+    handleDragEnd();
+  }, [draggingDevice, update, handleDragEnd]);
 
   const handleAddRack = async () => {
     if (newRackName.trim()) {
@@ -324,10 +338,35 @@ export default function RackView() {
   };
 
   const handleRemoveRack = async (rackId: number) => {
-    await removeRack(rackId);
-    if (selectedRackId === rackId) {
-      setSelectedRackId(null);
-    }
+    const rack = racks.find(r => r.id === rackId);
+    modal.confirm({
+      title: '确认删除',
+      content: `确定要删除机柜「${rack?.name || ''}」吗？其中的设备将保留但不再关联此机柜。`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        await removeRack(rackId);
+        if (selectedRackId === rackId) {
+          setSelectedRackId(null);
+        }
+      },
+    });
+  };
+
+  const handleRemoveDevice = () => {
+    if (!selectedDevice) return;
+    modal.confirm({
+      title: '确认删除',
+      content: `确定要删除设备「${selectedDevice.name}」吗？此操作不可撤销。`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        await remove(selectedDevice.id);
+        setSelectedDevice(null);
+      },
+    });
   };
 
   const handleMoveRackLeft = async (rack: Rack) => {
@@ -364,15 +403,15 @@ export default function RackView() {
   };
 
   const selectedDeviceInfo = selectedDevice ? {
-    ...selectedDevice,
+    device: selectedDevice,
     model: getDeviceModel(selectedDevice.device_model_id),
     rack: racks.find(r => r.id === selectedDevice.rack_id),
   } : null;
 
   const getStatusText = (status: string) => {
-    if (status === 'online') return '在线';
+    if (status === 'online') return '开机';
     if (status === 'offline') return '离线';
-    return '未配置';
+    return '未上架';
   };
 
   return (
@@ -424,7 +463,9 @@ export default function RackView() {
                       title="右移"
                     >▶</button>
                   </div>
-                  <span className="rack-name-text">{rack.name}</span>
+                  <span
+                    className="rack-name-text"
+                  >{rack.name}</span>
                   <button
                     className="rack-delete-btn"
                     onClick={(e) => {
@@ -455,7 +496,12 @@ export default function RackView() {
                     return (
                       <div
                         key={`u-${u}`}
-                        className={`rack-u ${dropTarget?.rackId === rack.id && dropTarget?.u === u ? 'drop-target' : ''}`}
+                        className={`rack-u ${
+                          dropTarget?.rackId === rack.id &&
+                          u >= dropTarget.u &&
+                          u < dropTarget.u + dropTarget.deviceHeight
+                            ? 'drop-target' : ''
+                        }`}
                         onDragOver={(e) => handleDragOver(e, rack.id, u)}
                         onDragLeave={handleDragLeave}
                         onDrop={(e) => handleDrop(e, rack.id, u)}
@@ -497,7 +543,7 @@ export default function RackView() {
                         draggable
                         onDragStart={(e) => {
                           e.stopPropagation();
-                          handleDragStart(device);
+                          handleDragStart(e, device);
                         }}
                         onDragEnd={handleDragEnd}
                         style={{
@@ -548,8 +594,12 @@ export default function RackView() {
 
       <aside id="sidebar">
         {unassignedDevices.length > 0 && (
-        <div className={`sidebar-section sidebar-stock${selectedDeviceInfo ? '' : ' full'}`}>
-          <div className="sidebar-title">库存设备</div>
+        <div
+          className={`sidebar-section sidebar-stock${selectedDeviceInfo ? '' : ' full'}${dragOverStock ? ' drag-over' : ''}`}
+          onDragOver={handleStockDragOver}
+          onDrop={handleStockDrop}
+        >
+          <div className="sidebar-title">资源池</div>
           <div className="sidebar-content">
             {unassignedDevices.map(device => {
               const model = getDeviceModel(device.device_model_id);
@@ -564,7 +614,7 @@ export default function RackView() {
                   onClick={() => handleSidebarDeviceClick(device)}
                   onDoubleClick={() => handleDeviceDoubleClick(device)}
                   onDragStart={(e) => {
-                    handleDragStart(device);
+                    handleDragStart(e, device);
                   }}
                   onDragEnd={handleDragEnd}
                 >
@@ -584,64 +634,13 @@ export default function RackView() {
         )}
 
         {selectedDeviceInfo && (
-        <div className="sidebar-section sidebar-detail">
-          <div className="sidebar-title">设备详情</div>
-          <div className="sidebar-content">
-                <div className="detail-header">
-                  <div className={`detail-type-badge ${selectedDeviceInfo.model?.type || 'server'}`}>
-                    {selectedDeviceInfo.model?.type ? DEVICE_TYPE_LABELS[selectedDeviceInfo.model.type] || selectedDeviceInfo.model.type : '未知'}
-                  </div>
-                  <div className={`detail-status-badge ${selectedDeviceInfo.status}`}>
-                    {getStatusText(selectedDeviceInfo.status)}
-                  </div>
-                </div>
-                <div className="detail-field">
-                  <span className="detail-label">名称</span>
-                  <span className="detail-value">{selectedDeviceInfo.name}</span>
-                </div>
-                <div className="detail-field">
-                  <span className="detail-label">型号</span>
-                  <span className="detail-value">{selectedDeviceInfo.model?.name || '-'}</span>
-                </div>
-                <div className="detail-field">
-                  <span className="detail-label">位置</span>
-                  <span className="detail-value">
-                    {selectedDeviceInfo.rack?.name || '未分配'} {selectedDeviceInfo.start_u != null ? `· ${selectedDeviceInfo.start_u}-${selectedDeviceInfo.end_u}U` : ''}
-                  </span>
-                </div>
-                <div className="detail-field">
-                  <span className="detail-label">IP</span>
-                  <span className="detail-value">{selectedDeviceInfo.ip_addresses || '-'}</span>
-                </div>
-                <div className="detail-field">
-                  <span className="detail-label">序列号</span>
-                  <span className="detail-value">{selectedDeviceInfo.serial_no || '-'}</span>
-                </div>
-                <div className="detail-field">
-                  <span className="detail-label">资产编号</span>
-                  <span className="detail-value" style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>{selectedDeviceInfo.asset_no || '-'}</span>
-                </div>
-                <div className="detail-field">
-                  <span className="detail-label">使用部门</span>
-                  <span className="detail-value">{selectedDeviceInfo.department || '-'}</span>
-                </div>
-                <div className="detail-field">
-                  <span className="detail-label">责任人</span>
-                  <span className="detail-value">{selectedDeviceInfo.owner || '-'}</span>
-                </div>
-                <div className="detail-field">
-                  <span className="detail-label">采购日期</span>
-                  <span className="detail-value">{selectedDeviceInfo.purchase_date || '-'}</span>
-                </div>
-                <div className="detail-actions">
-                  <button className="detail-btn" onClick={() => setSelectedDevice(null)}>取消选择</button>
-                  {selectedDeviceInfo.rack_id != null && (
-                    <button className="detail-btn" onClick={handleUnassignDevice}>移出机柜</button>
-                  )}
-                  <button className="detail-btn danger" onClick={handleRemoveDevice}>删除设备</button>
-                </div>
-          </div>
-        </div>
+        <DeviceDetailPanel
+          selectedDeviceInfo={selectedDeviceInfo}
+          onClose={() => setSelectedDevice(null)}
+          onUpdate={update}
+          onRemove={async (id) => { await remove(id); }}
+          models={models}
+        />
         )}
       </aside>
 

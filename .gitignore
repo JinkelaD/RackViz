@@ -1,39 +1,32 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-.venv/
-
-# Node
+# Dependencies
 node_modules/
-dist/
-.turbo/
 
-# Database
-*.db
+# Rust
+src-tauri/target/
+
+# Frontend
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# Build artifacts
+*.exe
+RackViz.exe
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
+.trae/
 
 # OS
-Thumbs.db
 .DS_Store
+Thumbs.db
 
-# Build artifacts
+# Archive
 *.7z
 *.zip
 
-# Misc
-.env
-.env.local
-*.log
+# WorkBuddy
+.workbuddy/
+
+# Database (runtime generated)
+*.db

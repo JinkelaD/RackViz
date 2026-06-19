@@ -1,37 +1,92 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { Table, Button, Input, Tag, Space, Modal, Form, Select, InputNumber, Popover, Checkbox } from 'antd';
-import { EditOutlined, PlusOutlined, SettingOutlined, ColumnHeightOutlined } from '@ant-design/icons';
+import { Table, Button, Input, Tag, Space, Modal, Form, Select, InputNumber, Popover, Checkbox, App, Dropdown } from 'antd';
+import { EditOutlined, PlusOutlined, SettingOutlined, ColumnHeightOutlined, UploadOutlined, ExportOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { useDevices } from '../hooks/useDevices';
 import { useDeviceModels } from '../hooks/useDeviceModels';
 import { useRacks } from '../hooks/useRacks';
 import { useRooms } from '../hooks/useRooms';
 import { Device, DeviceModel } from '../types';
+import * as tauriApi from '../tauri-api';
+import { DEVICE_TYPE_LABELS } from '../constants/labels';
 
 interface DeviceListContext {
   selectedRoomId: number | null;
 }
-
-const DEVICE_TYPE_LABELS: Record<string, string> = {
-  server: '服务器',
-  switch: '交换机',
-  router: '路由器',
-  storage: '存储',
-  pdu: 'PDU',
-  patch: '配线架',
-};
 
 const deviceTypeOptions = [
   { value: 'server', label: '服务器' },
   { value: 'switch', label: '交换机' },
   { value: 'router', label: '路由器' },
   { value: 'storage', label: '存储' },
-  { value: 'pdu', label: 'PDU' },
-  { value: 'patch', label: '配线架' },
+  { value: 'security', label: '安全设备' },
 ];
 
 type DeviceColumnKey = 'name' | 'model' | 'rack' | 'room' | 'position' | 'ip' | 'asset_no' | 'department' | 'owner' | 'status' | 'action';
+
+const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
+  name: 160,
+  model: 160,
+  room: 110,
+  rack: 110,
+  position: 90,
+  ip: 140,
+  asset_no: 130,
+  department: 120,
+  owner: 100,
+  status: 90,
+  action: 90,
+};
+
+function ResizableTitle(props: React.HTMLAttributes<HTMLElement> & {
+  onResize: (width: number) => void;
+  width?: number;
+}) {
+  const { onResize, width, style, ...restProps } = props;
+  const [resizing, setResizing] = useState(false);
+  const startX = useRef(0);
+  const startW = useRef(0);
+
+  const onMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setResizing(true);
+    startX.current = e.clientX;
+    startW.current = width || 100;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  useEffect(() => {
+    if (!resizing) return;
+    const onMouseMove = (e: MouseEvent) => {
+      const diff = e.clientX - startX.current;
+      onResize(Math.max(50, startW.current + diff));
+    };
+    const onMouseUp = () => {
+      setResizing(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [resizing, onResize]);
+
+  return (
+    <th {...restProps} style={{ ...style, position: 'relative' }}>
+      {restProps.children}
+      <div
+        className="column-resize-handle"
+        onMouseDown={onMouseDown}
+      />
+    </th>
+  );
+}
 
 const ALL_COLUMNS: { key: DeviceColumnKey; title: string }[] = [
   { key: 'name', title: '设备名称' },
@@ -53,18 +108,21 @@ function getTypeTag(type: string) {
     switch: 'cyan',
     router: 'gold',
     storage: 'purple',
-    pdu: 'red',
-    patch: 'default',
+    security: 'orange',
   };
   return <Tag color={colors[type]}>{DEVICE_TYPE_LABELS[type] || type}</Tag>;
 }
 
 export default function DeviceList() {
-  const { devices, loading, remove, create, update } = useDevices();
+  const { devices, loading, refresh, remove, create, update } = useDevices();
   const { models, create: createModel, update: updateModel, remove: removeModel } = useDeviceModels();
   const { racks } = useRacks();
   const { rooms } = useRooms();
   const { selectedRoomId } = useOutletContext<DeviceListContext>();
+  const { modal, message } = App.useApp();
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const roomRackIds = useMemo(() => {
     if (selectedRoomId === null) return null;
@@ -83,6 +141,44 @@ export default function DeviceList() {
   const [visibleColumns, setVisibleColumns] = useState<DeviceColumnKey[]>(
     ALL_COLUMNS.map(c => c.key)
   );
+  const [importing, setImporting] = useState(false);
+
+  const [columnWidths, setColumnWidths] = useState<Record<DeviceColumnKey, number>>(
+    () => ALL_COLUMNS.reduce((acc, c) => {
+      acc[c.key] = DEFAULT_COLUMN_WIDTHS[c.key] || 100;
+      return acc;
+    }, {} as Record<DeviceColumnKey, number>)
+  );
+
+  const handleColumnResize = useCallback((key: DeviceColumnKey) => (width: number) => {
+    setColumnWidths(prev => ({ ...prev, [key]: width }));
+  }, []);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchText, selectedRoomId]);
+
+  const handleDeviceImport = async () => {
+    setImporting(true);
+    try {
+      const result = await tauriApi.importExcelFromPath();
+      const parts = [`成功 ${result.imported} 条`];
+      if (result.skipped > 0) parts.push(`跳过重复 ${result.skipped} 条`);
+      if (result.errors.length > 0) parts.push(`失败 ${result.errors.length} 条`);
+      if (result.errors.length > 0) {
+        message.warning(`导入完成：${parts.join('，')}`);
+      } else if (result.skipped > 0) {
+        message.info(`导入完成：${parts.join('，')}`);
+      } else {
+        message.success(`成功导入 ${result.imported} 条设备`);
+      }
+      refresh();
+    } catch {
+      message.error('导入失败，请检查文件格式');
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const showDeviceModal = (device?: Device) => {
     if (device) {
@@ -102,10 +198,16 @@ export default function DeviceList() {
   const handleDeviceOk = async () => {
     try {
       const values = await deviceForm.validateFields();
+      const payload = {
+        ...values,
+        rack_id: values.status === 'unconfigured' ? null : (values.rack_id ?? null),
+        start_u: values.status === 'unconfigured' ? null : values.start_u,
+        end_u: values.status === 'unconfigured' ? null : values.end_u,
+      };
       if (editingDevice) {
-        await update(editingDevice.id, values);
+        await update(editingDevice.id, payload);
       } else {
-        await create(values);
+        await create(payload);
       }
       setDeviceModalVisible(false);
       deviceForm.resetFields();
@@ -183,9 +285,9 @@ export default function DeviceList() {
       unconfigured: 'default',
     };
     const labels: Record<string, string> = {
-      online: '在线',
+      online: '开机',
       offline: '离线',
-      unconfigured: '未配置',
+      unconfigured: '未上架',
     };
     return <Tag color={colors[status]}>{labels[status]}</Tag>;
   };
@@ -202,30 +304,52 @@ export default function DeviceList() {
   );
 
   const allDeviceColumns: ColumnsType<Device> = [
-    { title: '设备名称', dataIndex: 'name', key: 'name', width: 150, sorter: (a, b) => a.name.localeCompare(b.name, 'zh') },
-    { title: '型号', dataIndex: 'device_model_id', key: 'model', width: 150, render: (id: number | null) => getDeviceModelName(id), sorter: (a, b) => getDeviceModelName(a.device_model_id).localeCompare(getDeviceModelName(b.device_model_id), 'zh') },
-    { title: '机房', dataIndex: 'rack_id', key: 'room', width: 100, render: (id: number | null) => getRoomName(id), sorter: (a, b) => getRoomName(a.rack_id).localeCompare(getRoomName(b.rack_id), 'zh') },
-    { title: '机柜', dataIndex: 'rack_id', key: 'rack', width: 100, render: (id: number | null) => getRackName(id), sorter: (a, b) => getRackName(a.rack_id).localeCompare(getRackName(b.rack_id), 'zh') },
-    { title: '位置', key: 'position', width: 100, render: (_: unknown, record: Device) => record.start_u && record.end_u ? `${record.start_u}-${record.end_u}U` : '-', sorter: (a, b) => (a.start_u || 0) - (b.start_u || 0) },
-    { title: 'IP', dataIndex: 'ip_addresses', key: 'ip', width: 120, render: (ips: string) => ips || '-', sorter: (a, b) => (a.ip_addresses || '').localeCompare(b.ip_addresses || '') },
-    { title: '资产编号', dataIndex: 'asset_no', key: 'asset_no', width: 120, render: (no: string) => no || '-', sorter: (a, b) => (a.asset_no || '').localeCompare(b.asset_no || '') },
-    { title: '使用部门', dataIndex: 'department', key: 'department', width: 110, render: (dept: string) => dept || '-', sorter: (a, b) => (a.department || '').localeCompare(b.department || '', 'zh') },
-    { title: '责任人', dataIndex: 'owner', key: 'owner', width: 90, render: (owner: string) => owner || '-', sorter: (a, b) => (a.owner || '').localeCompare(b.owner || '', 'zh') },
-    { title: '状态', dataIndex: 'status', key: 'status', width: 80, render: (status: string) => getStatusTag(status), sorter: (a, b) => a.status.localeCompare(b.status) },
+    { title: '设备名称', dataIndex: 'name', key: 'name', sorter: (a, b) => a.name.localeCompare(b.name, 'zh') },
+    { title: '型号', dataIndex: 'device_model_id', key: 'model', render: (id: number | null) => getDeviceModelName(id), sorter: (a, b) => getDeviceModelName(a.device_model_id).localeCompare(getDeviceModelName(b.device_model_id), 'zh') },
+    { title: '机房', dataIndex: 'rack_id', key: 'room', render: (id: number | null) => getRoomName(id), sorter: (a, b) => getRoomName(a.rack_id).localeCompare(getRoomName(b.rack_id), 'zh') },
+    { title: '机柜', dataIndex: 'rack_id', key: 'rack', render: (id: number | null) => getRackName(id), sorter: (a, b) => getRackName(a.rack_id).localeCompare(getRackName(b.rack_id), 'zh') },
+    { title: '位置', key: 'position', render: (_: unknown, record: Device) => record.start_u && record.end_u ? `${record.start_u}-${record.end_u}U` : '-', sorter: (a, b) => (a.start_u || 0) - (b.start_u || 0) },
+    { title: 'IP', dataIndex: 'ip_addresses', key: 'ip', render: (ips: string) => ips || '-', sorter: (a, b) => (a.ip_addresses || '').localeCompare(b.ip_addresses || '') },
+    { title: '资产编号', dataIndex: 'asset_no', key: 'asset_no', render: (no: string) => no || '-', sorter: (a, b) => (a.asset_no || '').localeCompare(b.asset_no || '') },
+    { title: '使用部门', dataIndex: 'department', key: 'department', render: (dept: string) => dept || '-', sorter: (a, b) => (a.department || '').localeCompare(b.department || '', 'zh') },
+    { title: '责任人', dataIndex: 'owner', key: 'owner', render: (owner: string) => owner || '-', sorter: (a, b) => (a.owner || '').localeCompare(b.owner || '', 'zh') },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (status: string) => getStatusTag(status), sorter: (a, b) => a.status.localeCompare(b.status) },
     {
-      title: '操作', key: 'action', width: 150, fixed: 'right' as const,
+      title: '操作', key: 'action', fixed: 'right' as const,
       render: (_: unknown, record: Device) => (
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => showDeviceModal(record)}>编辑</Button>
-          <Button size="small" danger onClick={() => remove(record.id)}>删除</Button>
+          <Button size="small" danger onClick={() => {
+            modal.confirm({
+              title: '确认删除',
+              content: `确定要删除设备「${record.name}」吗？此操作不可撤销。`,
+              okText: '删除',
+              okType: 'danger',
+              cancelText: '取消',
+              onOk: () => remove(record.id),
+            });
+          }}>删除</Button>
         </Space>
       ),
     },
   ];
 
-  const visibleDeviceColumns = allDeviceColumns.filter(
-    col => visibleColumns.includes(col.key as DeviceColumnKey)
-  );
+  const visibleDeviceColumns = allDeviceColumns
+    .filter(col => visibleColumns.includes(col.key as DeviceColumnKey))
+    .map(col => ({
+      ...col,
+      width: columnWidths[col.key as DeviceColumnKey] || 100,
+      onHeaderCell: (column: typeof col) => ({
+        width: (column as { width?: number }).width,
+        onResize: handleColumnResize(col.key as DeviceColumnKey),
+      }),
+    }));
+
+  const components = {
+    header: {
+      cell: ResizableTitle,
+    },
+  };
 
   const modelColumns = [
     { title: '型号', dataIndex: 'name', key: 'name', width: 180 },
@@ -256,35 +380,67 @@ export default function DeviceList() {
   );
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', flexShrink: 0, borderBottom: '1px solid var(--border-default)' }}>
-        <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>设备台账</h2>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+    <div className="device-list-page">
+      <div className="device-list-header">
+        <h2 className="device-list-title">设备台账</h2>
+        <div className="device-list-toolbar">
           <Popover content={columnVisibilityContent} title="选择显示的列" trigger="click" placement="bottomRight">
             <Button icon={<ColumnHeightOutlined />}>列选项</Button>
           </Popover>
           <Button onClick={() => showModelModal()} icon={<SettingOutlined />}>
             型号管理
           </Button>
+          <Button icon={<UploadOutlined />} loading={importing} onClick={handleDeviceImport}>
+              导入
+            </Button>
+          <Dropdown
+            menu={{
+              items: [
+                { key: 'excel', label: 'Excel 格式', onClick: async () => {
+                  await tauriApi.exportDevicesDataExcel();
+                }},
+                { key: 'html', label: 'HTML 格式', onClick: async () => {
+                  await tauriApi.exportReportHtml();
+                }},
+              ],
+            }}
+            trigger={['click']}
+          >
+            <Button icon={<ExportOutlined />}>导出</Button>
+          </Dropdown>
           <Button type="primary" onClick={() => showDeviceModal()} icon={<PlusOutlined />}>
             添加设备
           </Button>
+          <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
+            刷新
+          </Button>
           <Input
+            className="device-list-search"
             placeholder="搜索设备..."
-            style={{ width: 200 }}
             value={searchText}
             onChange={e => setSearchText(e.target.value)}
           />
         </div>
       </div>
 
-      <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+      <div className="device-list-table-wrap">
         <Table
           dataSource={filteredDevices}
           columns={visibleDeviceColumns}
+          components={components}
           loading={loading}
           rowKey="id"
-          pagination={{ pageSize: 10, pageSizeOptions: [10, 20, 50], showSizeChanger: true, showTotal: (total: number) => `共 ${total} 条` }}
+          pagination={{
+            current: currentPage,
+            pageSize,
+            pageSizeOptions: [10, 20, 50],
+            showSizeChanger: true,
+            showTotal: (total: number) => `共 ${total} 条`,
+            onChange: (page, size) => {
+              setCurrentPage(page);
+              setPageSize(size);
+            },
+          }}
           bordered={false}
           scroll={{ x: 'max-content' }}
           size="middle"
@@ -312,13 +468,19 @@ export default function DeviceList() {
             </Select>
           </Form.Item>
           <Form.Item name="rack_id" label="所属机柜">
-            <Select placeholder="请选择机柜（可选）">
-              <Select.Option value={null}>不放入机柜</Select.Option>
+            <Select placeholder="请选择机柜（可选）" allowClear>
               {racks.map(rack => (
                 <Select.Option key={rack.id} value={rack.id}>
                   {rack.name} ({rack.height_u}U)
                 </Select.Option>
               ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="status" label="设备状态">
+            <Select placeholder="请选择状态">
+              <Select.Option value="online">开机</Select.Option>
+              <Select.Option value="offline">离线</Select.Option>
+              <Select.Option value="unconfigured">未上架</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item name="start_u" label="起始U位">
@@ -361,10 +523,10 @@ export default function DeviceList() {
         width={700}
         footer={null}
       >
-        <div style={{ marginBottom: 12, display: 'flex', gap: 8 }}>
+        <div className="model-search-bar">
           <Input
+            className="model-search-input"
             placeholder="搜索型号..."
-            style={{ width: 200 }}
             value={modelSearchText}
             onChange={e => setModelSearchText(e.target.value)}
           />
@@ -382,8 +544,8 @@ export default function DeviceList() {
           size="small"
         />
 
-        <div style={{ marginTop: 16, padding: '12px 0', borderTop: '1px solid var(--border-default)' }}>
-          <h4 style={{ margin: '0 0 12px 0', fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
+        <div className="model-form-header">
+          <h4 className="model-form-title">
             {editingModel ? '编辑型号' : '新增型号'}
           </h4>
           <Form form={modelForm} layout="inline" onFinish={handleModelSubmit} style={{ gap: 8, flexWrap: 'wrap' }}>

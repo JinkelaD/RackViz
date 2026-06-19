@@ -1,40 +1,14 @@
-import { useState, useEffect, useCallback } from 'react';
 import { Device } from '../types';
-import { deviceApi } from '../api/client';
+import * as api from '../tauri-api';
+import { useApiList } from './useApiList';
 
 export function useDevices() {
-  const [devices, setDevices] = useState<Device[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const refresh = useCallback(() => {
-    setLoading(true);
-    deviceApi.list().then(setDevices).finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { refresh(); }, [refresh]);
-
-  const create = async (data: Partial<Device>) => {
-    await deviceApi.create(data);
-    refresh();
-  };
-
-  const update = async (id: number, data: Partial<Device>) => {
-    await deviceApi.update(id, data);
-    refresh();
-  };
-
-  const remove = async (id: number) => {
-    await deviceApi.delete(id);
-    refresh();
-  };
-
-  const refreshStatus = async () => {
-    const results = await deviceApi.refreshStatus();
-    setDevices(prev => prev.map(d => {
-      const r = results.find(r => r.id === d.id);
-      return r ? { ...d, status: r.status as Device['status'] } : d;
-    }));
-  };
-
-  return { devices, loading, refresh, create, update, remove, refreshStatus };
+  const { items: devices, loading, refresh, create, update, remove } = useApiList<Device>(
+    () => api.listDevices() as Promise<Device[]>,
+    (data) => api.createDevice(data as api.DeviceCreate) as Promise<Device>,
+    (id, data) => api.updateDevice(id, data as api.DeviceUpdate) as Promise<Device | null>,
+    (id) => api.deleteDevice(id),
+    { optimistic: true },
+  );
+  return { devices, loading, refresh, create, update, remove };
 }

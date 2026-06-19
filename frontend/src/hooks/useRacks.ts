@@ -1,36 +1,19 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback } from 'react';
 import { Rack } from '../types';
-import { rackApi } from '../api/client';
+import * as api from '../tauri-api';
+import { useApiList } from './useApiList';
 
 export function useRacks() {
-  const [racks, setRacks] = useState<Rack[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const refresh = useCallback(() => {
-    setLoading(true);
-    rackApi.list().then(setRacks).finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { refresh(); }, [refresh]);
-
-  const create = async (data: Partial<Rack>) => {
-    await rackApi.create(data);
-    refresh();
-  };
-
-  const update = async (id: number, data: Partial<Rack>) => {
-    await rackApi.update(id, data);
-    refresh();
-  };
+  const { items: racks, loading, refresh, create, update, remove } = useApiList<Rack>(
+    () => api.listRacks() as Promise<Rack[]>,
+    (data) => api.createRack(data as api.RackCreate) as Promise<Rack>,
+    (id, data) => api.updateRack(id, data as api.RackUpdate) as Promise<Rack | null>,
+    (id) => api.deleteRack(id),
+  );
 
   const updateQuiet = useCallback(async (id: number, data: Partial<Rack>) => {
-    return rackApi.update(id, data);
+    return api.updateRack(id, data as api.RackUpdate);
   }, []);
-
-  const remove = async (id: number) => {
-    await rackApi.delete(id);
-    refresh();
-  };
 
   return { racks, loading, refresh, create, update, updateQuiet, remove };
 }
