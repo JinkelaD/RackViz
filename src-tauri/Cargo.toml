@@ -1,6 +1,6 @@
 [package]
 name = "rackviz"
-version = "0.2.0"
+version = "1.2.0"
 edition = "2021"
 description = "RackViz - 机房设备管理系统"
 
@@ -31,3 +31,8 @@ tauri-build = { version = "2", features = [] }
 [lib]
 name = "rackviz_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+ok_expect = "warn"

@@ -158,7 +158,7 @@ export default function Layout() {
     <div id="app">
       <header id="header">
         <div className="logo">Rack<span>Viz</span></div>
-        <span className="version">v1.1</span>
+        <span className="version">v1.2.0</span>
         <button className="header-btn" onClick={toggleTheme} title={currentTheme === 'dark' ? '切换亮色主题' : '切换暗色主题'}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             {currentTheme === 'dark' ? (

@@ -27,6 +27,7 @@ Thumbs.db
 
 # WorkBuddy
 .workbuddy/
+.codebuddy/
 
 # Database (runtime generated)
 *.db

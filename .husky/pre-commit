@@ -1,0 +1,33 @@
+#!/bin/sh
+
+# Rust 检查
+echo "=== Cargo check ==="
+cd src-tauri && cargo check --quiet 2>&1
+if [ $? -ne 0 ]; then
+  echo "❌ Cargo check 失败，请修复后再提交"
+  exit 1
+fi
+
+# Rust Clippy 检查
+echo "=== Cargo clippy ==="
+cd src-tauri && cargo clippy --quiet 2>&1 | grep -E "error|unwrap_used|expect_used"
+if [ $? -eq 0 ]; then
+  echo "⚠️  Clippy 发现 unwrap/expect 使用，将在后续 Phase 修复"
+fi
+
+# TypeScript 类型检查
+echo "=== TypeScript 检查 ==="
+cd frontend && npx tsc --noEmit 2>&1
+if [ $? -ne 0 ]; then
+  echo "❌ TypeScript 类型检查失败，请修复后再提交"
+  exit 1
+fi
+
+# ESLint 检查（仅警告，不阻塞——红线违规将在后续 Phase 修复）
+echo "=== ESLint 检查 ==="
+cd frontend && npx eslint src/ --max-warnings 999 2>&1 | grep -E "no-explicit-any|no-non-null-assertion"
+if [ $? -eq 0 ]; then
+  echo "⚠️  ESLint 发现 any 类型或非空断言，将在后续 Phase 修复"
+fi
+
+echo "✅ Pre-commit 检查完成"
