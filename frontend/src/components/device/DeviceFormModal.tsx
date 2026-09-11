@@ -1,0 +1,145 @@
+import { useEffect, useState } from 'react';
+import { Modal, Form, Input, Select, InputNumber } from 'antd';
+import type { Device, DeviceModel, Rack } from '../../types';
+import { DEVICE_TYPE_LABELS } from '../../constants/labels';
+
+interface DeviceFormModalProps {
+  open: boolean;
+  /** null = 新建 */
+  editing: Device | null;
+  models: DeviceModel[];
+  racks: Rack[];
+  onCancel: () => void;
+  /** 由父组件负责 create/update、错误提示与关闭 */
+  onSave: (payload: Record<string, unknown>, editing: Device | null) => Promise<void>;
+}
+
+/** 设备台账页：新增 / 编辑设备表单弹窗 */
+export default function DeviceFormModal({ open, editing, models, racks, onCancel, onSave }: DeviceFormModalProps) {
+  const [form] = Form.useForm();
+  const [saving, setSaving] = useState(false);
+
+  // 打开时按编辑/新增填充
+  useEffect(() => {
+    if (!open) return;
+    if (editing) {
+      form.setFieldsValue({
+        ...editing,
+        device_model_id: editing.device_model_id,
+        rack_id: editing.rack_id,
+      });
+    } else {
+      form.resetFields();
+    }
+  }, [open, editing, form]);
+
+  /** 选择型号 → 依据型号高度自动推算 end_u */
+  const handleModelChange = (modelId: number) => {
+    const model = models.find(m => m.id === modelId);
+    if (model) {
+      form.setFieldsValue({ end_u: (form.getFieldValue('start_u') || 1) + model.height_u - 1 });
+    }
+  };
+
+  /** 修改起始 U 位 → 联动 end_u */
+  const handleStartUChange = (startU: number | null) => {
+    const modelId = form.getFieldValue('device_model_id');
+    const model = models.find(m => m.id === Number(modelId));
+    if (model && startU) {
+      form.setFieldsValue({ end_u: startU + model.height_u - 1 });
+    }
+  };
+
+  const handleOk = async () => {
+    try {
+      const values = await form.validateFields();
+      const payload: Record<string, unknown> = {
+        ...values,
+        rack_id: values.status === 'unconfigured' ? null : (values.rack_id ?? null),
+        start_u: values.status === 'unconfigured' ? null : values.start_u,
+        end_u: values.status === 'unconfigured' ? null : values.end_u,
+      };
+      setSaving(true);
+      await onSave(payload, editing);
+    } catch (error) {
+      // 校验失败或保存失败：antd 已在字段上提示；父组件负责 message 与关闭
+      if (error instanceof Error) {
+        console.error('保存设备失败:', error);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={editing ? '编辑设备' : '添加设备'}
+      open={open}
+      onOk={handleOk}
+      onCancel={onCancel}
+      confirmLoading={saving}
+      width={600}
+    >
+      <Form form={form} layout="vertical">
+        <Form.Item name="name" label="设备名称" rules={[{ required: true, message: '请输入设备名称' }]}>
+          <Input placeholder="请输入设备名称" />
+        </Form.Item>
+        <Form.Item name="device_model_id" label="设备型号" rules={[{ required: true, message: '请选择设备型号' }]}>
+          <Select placeholder="请选择设备型号" onChange={handleModelChange}>
+            {models.map(model => (
+              <Select.Option key={model.id} value={model.id}>
+                {model.name} ({DEVICE_TYPE_LABELS[model.type] || model.type} · {model.height_u}U)
+              </Select.Option>
+            ))}
+          </Select>
+        </Form.Item>
+        <Form.Item name="rack_id" label="所属机柜">
+          <Select placeholder="请选择机柜（可选）" allowClear>
+            {racks.map(rack => (
+              <Select.Option key={rack.id} value={rack.id}>
+                {rack.name} ({rack.height_u}U)
+              </Select.Option>
+            ))}
+          </Select>
+        </Form.Item>
+        <Form.Item name="status" label="设备状态">
+          <Select placeholder="请选择状态">
+            <Select.Option value="online">开机</Select.Option>
+            <Select.Option value="offline">离线</Select.Option>
+            <Select.Option value="unconfigured">未上架</Select.Option>
+          </Select>
+        </Form.Item>
+        <Form.Item name="start_u" label="起始U位">
+          <InputNumber min={1} max={100} placeholder="起始U位" onChange={handleStartUChange} />
+        </Form.Item>
+        <Form.Item name="end_u" label="结束U位">
+          <InputNumber min={1} max={100} placeholder="结束U位" disabled />
+        </Form.Item>
+        <Form.Item name="ip_addresses" label="IP地址">
+          <Input placeholder="多个IP用逗号分隔" />
+        </Form.Item>
+        <Form.Item name="serial_no" label="序列号">
+          <Input placeholder="设备序列号" />
+        </Form.Item>
+        <Form.Item name="asset_no" label="资产编号">
+          <Input placeholder="资产编号（便于查账）" />
+        </Form.Item>
+        <Form.Item name="department" label="使用部门">
+          <Input placeholder="所属部门" />
+        </Form.Item>
+        <Form.Item name="owner" label="责任人">
+          <Input placeholder="设备负责人" />
+        </Form.Item>
+        <Form.Item name="function" label="功能描述">
+          <Input placeholder="设备功能描述" />
+        </Form.Item>
+        <Form.Item name="purchase_date" label="采购日期">
+          <Input type="date" />
+        </Form.Item>
+        <Form.Item name="warranty_expire" label="质保到期">
+          <Input type="date" />
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}

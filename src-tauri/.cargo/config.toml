@@ -1,0 +1,13 @@
+# src-tauri/.cargo/config.toml
+# 绕过 static.crates.io 直连 403：改用 rsproxy.cn 稀疏镜像
+# 本文件随仓库入库（.gitignore 仅忽略 .cargo-home/，不忽略 .cargo/），
+# 且 Cargo 沿当前工作目录向上查找 config.toml，Tauri 构建在 src-tauri/ 下执行 cargo 时必定命中。
+
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[net]
+git-fetch-with-cli = true

@@ -1,0 +1,40 @@
+[package]
+name = "rackviz"
+version = "1.2.0"
+edition = "2021"
+description = "RackViz - 机房设备管理系统"
+
+[dependencies]
+tauri = { version = "2", features = ["custom-protocol"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-dialog = "2"
+rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.35"
+calamine = "0.36"
+rust_xlsxwriter = "0.99"
+askama = "0.16"
+chrono = { version = "0.4", features = ["serde"] }
+log = "0.4"
+flexi_logger = "0.31"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[lints.clippy]
+unwrap_used = "warn"          # 生产代码中的 unwrap
+expect_used = "warn"          # 生产代码中的 expect
+indexing_slicing = "allow"    # 暂不强制
+panic = "warn"                # 可能 panic 的代码
+print_stderr = "warn"         # 使用 log 替代 print
+print_stdout = "warn"         # 使用 log 替代 print
+
+[lib]
+name = "rackviz_lib"
+crate-type = ["rlib"]
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = "symbols"

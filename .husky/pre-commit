@@ -1,0 +1,21 @@
+#!/bin/sh
+# RackViz pre-commit 钩子（对应代码审查规范 §8.3）
+# 安装：git init 后复制本文件到 .git/hooks/pre-commit 并 chmod +x
+# 或安装 husky：npm i -D husky && npx husky install
+echo "🔍 运行 RackViz 预提交检查..."
+
+ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+
+# Rust 检查
+cd "$ROOT_DIR/src-tauri" || exit 1
+cargo check --quiet || { echo "❌ cargo check 失败"; exit 1; }
+cargo clippy --quiet -- -D warnings || { echo "❌ clippy 发现问题"; exit 1; }
+cargo test --quiet || { echo "❌ 测试失败"; exit 1; }
+
+# 前端检查
+cd "$ROOT_DIR/frontend" || exit 1
+npx tsc --noEmit --pretty || { echo "❌ TypeScript 类型检查失败"; exit 1; }
+npx eslint src/ --quiet 2>/dev/null || echo "⚠ ESLint 未安装，跳过（可用 node scripts/lint-check.mjs 离线检查）"
+node scripts/lint-check.mjs || { echo "❌ 红线静态检查失败"; exit 1; }
+
+echo "✅ 预提交检查通过"

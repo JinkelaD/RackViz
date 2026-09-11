@@ -1,0 +1,62 @@
+# ============================================================================
+#  RackViz — Git 换行符与文件类型规范
+#
+#  背景：本机 core.autocrlf=true，若不显式声明，.bat 会在仓库内被存为 LF，
+#        其他平台 clone 后 cmd 将无法正确解析（LF 下 goto / 复合块不可靠）。
+# ============================================================================
+
+# 默认：仓库内以 LF 存储，检出时按平台转换
+* text=auto
+
+# ---------------------------------------------------------------------------
+# Windows 批处理：必须 CRLF，任何平台检出都是 CRLF
+# ---------------------------------------------------------------------------
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# ---------------------------------------------------------------------------
+# 源码与配置：强制 LF，消除跨平台差异
+# ---------------------------------------------------------------------------
+*.rs            text eol=lf
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.js            text eol=lf
+*.mjs           text eol=lf
+*.cjs           text eol=lf
+*.json          text eol=lf
+*.css           text eol=lf
+*.html          text eol=lf
+*.toml          text eol=lf
+*.md            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.mermaid       text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+
+# Shell 脚本（husky 钩子）必须 LF
+*.sh            text eol=lf
+.husky/*        text eol=lf
+
+# ---------------------------------------------------------------------------
+# 二进制：禁止任何换行符转换
+# ---------------------------------------------------------------------------
+*.xlsx          binary
+*.xls           binary
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.ico           binary
+*.icns          binary
+*.svg           text eol=lf
+*.exe           binary
+*.dll           binary
+*.pdb           binary
+*.db            binary
+
+# ---------------------------------------------------------------------------
+# 语言统计修正（避免 GitHub 把 .tsx 归入其他语言）
+# ---------------------------------------------------------------------------
+*.rs            linguist-language=Rust
+*.tsx           linguist-language=TypeScript
+*.ts            linguist-language=TypeScript

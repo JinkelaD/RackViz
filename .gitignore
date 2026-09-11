@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Rust
+src-tauri/target/
+
+# 离线构建缓存（本会话使用，CARGO_HOME 指向此目录；可安全删除）
+.cargo-home/
+
+# Frontend
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# Build artifacts
+*.exe
+RackViz.exe
+
+# IDE
+.vscode/
+.idea/
+.trae/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Archive
+*.7z
+*.zip
+
+# WorkBuddy
+.workbuddy/
+
+# Database (runtime generated)
+*.db

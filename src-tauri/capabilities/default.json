@@ -1,0 +1,11 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for RackViz",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "dialog:allow-save",
+    "dialog:allow-open"
+  ]
+}
