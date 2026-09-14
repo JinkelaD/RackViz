@@ -1,4 +1,4 @@
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
 
 const CURRENT_VERSION: i32 = 5;
 
