@@ -92,8 +92,7 @@ echo ===========================================================================
 echo   [OK] 全部检查通过
 echo ============================================================================
 endlocal
-exit /b 0
-
+goto :__end
 :: ===========================================================================
 :: 错误分支
 :: ===========================================================================
@@ -103,41 +102,41 @@ echo        已尝试 VS2019 / VS2022 的 BuildTools / Community / Professional / En
 echo        解决办法：从开始菜单打开 x64 Native Tools Command Prompt，
 echo                  cd 到本目录后手动执行 cargo check 与 cargo test
 endlocal
-exit /b 1
-
+goto :__end
 :vcvars_failed
 echo [FAIL] vcvars64.bat 执行失败
 endlocal
-exit /b 1
-
+goto :__end
 :no_cargo
 echo [FAIL] 未找到 cargo
 echo        预期位置: %USERPROFILE%\.cargo\bin\cargo.exe
 echo        请确认已安装 Rust，参见 https://rustup.rs
 endlocal
-exit /b 1
-
+goto :__end
 :no_npm
 echo [FAIL] 未找到 npm，请确认已安装 Node.js
 endlocal
-exit /b 1
-
+goto :__end
 :frontend_failed
 echo [FAIL] 前端依赖安装失败
 endlocal
-exit /b 1
-
+goto :__end
 :tsc_failed
 echo [FAIL] tsc --noEmit 类型检查未通过
 endlocal
-exit /b 1
-
+goto :__end
 :check_failed
 echo [FAIL] cargo check 未通过
 endlocal
-exit /b 1
-
+goto :__end
 :test_failed
 echo [FAIL] cargo test 未通过
 endlocal
-exit /b 1
+goto :__end
+
+:__end
+echo.
+echo ============================================================
+echo  脚本执行完毕。按任意键关闭此窗口（上方为完整输出）。
+echo ============================================================
+pause >nul
