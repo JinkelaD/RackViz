@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 
 const CURRENT_VERSION: i32 = 5;
 
@@ -13,18 +13,26 @@ pub fn run(conn: &Connection) -> Result<(), rusqlite::Error> {
             with_migration_tx(conn, migrate_v1_to_v2)?;
             with_migration_tx(conn, migrate_v2_to_v3)?;
             with_migration_tx(conn, migrate_v3_to_v4)?;
+            with_migration_tx(conn, migrate_v4_to_v5)?;
         }
         1 => {
             with_migration_tx(conn, migrate_v1_to_v2)?;
             with_migration_tx(conn, migrate_v2_to_v3)?;
             with_migration_tx(conn, migrate_v3_to_v4)?;
+            with_migration_tx(conn, migrate_v4_to_v5)?;
         }
         2 => {
             with_migration_tx(conn, migrate_v2_to_v3)?;
             with_migration_tx(conn, migrate_v3_to_v4)?;
+            with_migration_tx(conn, migrate_v4_to_v5)?;
         }
-        3 => with_migration_tx(conn, migrate_v3_to_v4)?,
-        4 => {}
+        3 => {
+            with_migration_tx(conn, migrate_v3_to_v4)?;
+            with_migration_tx(conn, migrate_v4_to_v5)?;
+        }
+        4 => {
+            with_migration_tx(conn, migrate_v4_to_v5)?;
+        }
         _ => {
             log::warn!("数据库版本 {} 高于当前版本 {}", version, CURRENT_VERSION);
         }
@@ -277,7 +285,7 @@ fn migrate_v4_to_v5(conn: &Connection) -> Result<(), rusqlite::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::Connection;
+    use rusqlite::{Connection, params};
 
     fn open_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
