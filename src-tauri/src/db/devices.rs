@@ -31,13 +31,17 @@ fn row_to_device(row: &rusqlite::Row) -> rusqlite::Result<Device> {
         status: row.get::<_, String>(14).unwrap_or_else(|_| "unconfigured".into()),
         power_watt: row.get(15).unwrap_or(0),
         height_u: row.get::<_, i32>(16).unwrap_or(1),
+        created_at: row.get(17)?,
+        updated_at: row.get(18)?,
+        deleted_at: row.get(19)?,
     })
 }
 
 const DEVICE_SELECT: &str =
     "SELECT id, name, device_model_id, rack_id, start_u, end_u, \
      ip_addresses, serial_no, asset_no, department, owner, \
-     function, purchase_date, warranty_expire, status, power_watt, height_u \
+     function, purchase_date, warranty_expire, status, power_watt, height_u, \
+     created_at, updated_at, deleted_at \
      FROM devices";
 
 /// 推导设备固有高度：显式值 > 已给 U 位区间 > 型号高度 > 1。

@@ -56,6 +56,10 @@ pub struct DeviceModel {
     pub device_type: String,
     pub height_u: i32,
     pub power_watt: i32,
+    /// 创建时间（UTC ISO8601，Rust 内部维护，下同）
+    pub created_at: Option<String>,
+    /// 最近更新时间
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -65,6 +69,8 @@ pub struct Room {
     pub name: String,
     pub location: String,
     pub sort_order: i32,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -78,6 +84,8 @@ pub struct Rack {
     pub view: String,
     pub sort_order: i32,
     pub room_id: Option<i32>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -101,6 +109,13 @@ pub struct Device {
     pub power_watt: i32,
     /// 设备固有高度（U）。v4 起持久化：下架/重上架不再丢失（回归：多U设备重上架变 1U）。
     pub height_u: i32,
+    /// 创建时间（UTC ISO8601，Rust 内部维护）
+    pub created_at: Option<String>,
+    /// 最近更新时间（insert 时等于 created_at；update/软删时刷新）
+    pub updated_at: Option<String>,
+    /// 软删除标记（N-09）：NULL = 未删除；非 NULL = 回收站中。
+    /// 除回收站 / `include_deleted=true` 外，所有查询必须过滤 `deleted_at IS NULL`。
+    pub deleted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

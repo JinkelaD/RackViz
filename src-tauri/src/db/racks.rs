@@ -6,7 +6,7 @@ use crate::db::patch_assign;
 
 pub fn list_racks(conn: &Connection) -> Result<Vec<Rack>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, height_u, row, col, view, sort_order, room_id FROM racks ORDER BY sort_order, id"
+        "SELECT id, name, height_u, row, col, view, sort_order, room_id, created_at, updated_at FROM racks ORDER BY sort_order, id"
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(Rack {
@@ -18,6 +18,8 @@ pub fn list_racks(conn: &Connection) -> Result<Vec<Rack>, AppError> {
             view: row.get(5)?,
             sort_order: row.get(6)?,
             room_id: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.into())
@@ -25,7 +27,7 @@ pub fn list_racks(conn: &Connection) -> Result<Vec<Rack>, AppError> {
 
 pub fn get_rack(conn: &Connection, id: i32) -> Result<Option<Rack>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, height_u, row, col, view, sort_order, room_id FROM racks WHERE id = ?1"
+        "SELECT id, name, height_u, row, col, view, sort_order, room_id, created_at, updated_at FROM racks WHERE id = ?1"
     )?;
     let mut rows = stmt.query_map(params![id], |row| {
         Ok(Rack {
@@ -37,6 +39,8 @@ pub fn get_rack(conn: &Connection, id: i32) -> Result<Option<Rack>, AppError> {
             view: row.get(5)?,
             sort_order: row.get(6)?,
             room_id: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
         })
     })?;
     Ok(rows.next().transpose()?)

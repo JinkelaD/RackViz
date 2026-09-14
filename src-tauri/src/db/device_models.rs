@@ -6,7 +6,7 @@ use crate::db::patch_assign;
 
 pub fn list_device_models(conn: &Connection) -> Result<Vec<DeviceModel>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, manufacturer, type, height_u, power_watt FROM device_models ORDER BY name"
+        "SELECT id, name, manufacturer, type, height_u, power_watt, created_at, updated_at FROM device_models ORDER BY name"
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(DeviceModel {
@@ -16,6 +16,8 @@ pub fn list_device_models(conn: &Connection) -> Result<Vec<DeviceModel>, AppErro
             device_type: row.get(3)?,
             height_u: row.get(4)?,
             power_watt: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.into())
@@ -23,7 +25,7 @@ pub fn list_device_models(conn: &Connection) -> Result<Vec<DeviceModel>, AppErro
 
 pub fn get_device_model(conn: &Connection, id: i32) -> Result<Option<DeviceModel>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, manufacturer, type, height_u, power_watt FROM device_models WHERE id = ?1"
+        "SELECT id, name, manufacturer, type, height_u, power_watt, created_at, updated_at FROM device_models WHERE id = ?1"
     )?;
     let mut rows = stmt.query_map(params![id], |row| {
         Ok(DeviceModel {
@@ -33,6 +35,8 @@ pub fn get_device_model(conn: &Connection, id: i32) -> Result<Option<DeviceModel
             device_type: row.get(3)?,
             height_u: row.get(4)?,
             power_watt: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
         })
     })?;
     Ok(rows.next().transpose()?)

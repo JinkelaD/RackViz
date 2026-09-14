@@ -6,7 +6,7 @@ use crate::db::patch_assign;
 
 pub fn list_rooms(conn: &Connection) -> Result<Vec<Room>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, location, sort_order FROM rooms ORDER BY sort_order, id"
+        "SELECT id, name, location, sort_order, created_at, updated_at FROM rooms ORDER BY sort_order, id"
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(Room {
@@ -14,6 +14,8 @@ pub fn list_rooms(conn: &Connection) -> Result<Vec<Room>, AppError> {
             name: row.get(1)?,
             location: row.get(2)?,
             sort_order: row.get(3)?,
+            created_at: row.get(4)?,
+            updated_at: row.get(5)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.into())
@@ -21,7 +23,7 @@ pub fn list_rooms(conn: &Connection) -> Result<Vec<Room>, AppError> {
 
 pub fn get_room(conn: &Connection, id: i32) -> Result<Option<Room>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, location, sort_order FROM rooms WHERE id = ?1"
+        "SELECT id, name, location, sort_order, created_at, updated_at FROM rooms WHERE id = ?1"
     )?;
     let mut rows = stmt.query_map(params![id], |row| {
         Ok(Room {
@@ -29,6 +31,8 @@ pub fn get_room(conn: &Connection, id: i32) -> Result<Option<Room>, AppError> {
             name: row.get(1)?,
             location: row.get(2)?,
             sort_order: row.get(3)?,
+            created_at: row.get(4)?,
+            updated_at: row.get(5)?,
         })
     })?;
     Ok(rows.next().transpose()?)
