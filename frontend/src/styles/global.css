@@ -148,6 +148,110 @@
   --shadow-glow-cyan: 0 0 16px rgba(8,145,178,0.1);
 }
 
+/* ----- Eye-Care Green Theme Tokens（护眼绿，亮色系） ------ */
+[data-theme="eye"] {
+  --bg-deepest: #E9F2E3;
+  --bg-deep: #FFFFFF;
+  --bg-default: #EEF5EA;
+  --bg-elevated: #FFFFFF;
+  --bg-overlay: #FFFFFF;
+  --bg-raised: #DCE8D6;
+
+  --border-default: #C5D8BC;
+  --border-emphasis: #9CBE90;
+  --border-active: #2E7D32;
+  --border-focus: #2E7D32;
+
+  --text-primary: #1B2E1B;
+  --text-secondary: #4A5D48;
+  --text-muted: #7C8F78;
+  --text-inverse: #FFFFFF;
+  --text-disabled: #B4C7AB;
+
+  --accent-blue: #2E7D32;
+  --accent-cyan: #0F766E;
+  --accent-green: #2E7D32;
+  --accent-amber: #B45309;
+  --accent-red: #C0392B;
+  --accent-green-subtle: rgba(46, 125, 50, 0.12);
+  --accent-purple: #6D4C9F;
+  --accent-pink: #B5397A;
+
+  --status-online: #2E7D32;
+  --status-offline: #C0392B;
+  --status-warning: #B45309;
+  --status-error: #C0392B;
+  --status-idle: #7C8F78;
+
+  --type-server: #2E7D32;
+  --type-switch: #0F766E;
+  --type-router: #B45309;
+  --type-storage: #6D4C9F;
+  --type-nas: #15803D;
+  --type-security: #C0392B;
+  --type-loadbalancer: #B5397A;
+  --type-other: #64748B;
+
+  --shadow-xs: 0 1px 2px rgba(27,46,27,0.06);
+  --shadow-sm: 0 1px 3px rgba(27,46,27,0.08);
+  --shadow-md: 0 3px 8px rgba(27,46,27,0.10);
+  --shadow-lg: 0 6px 16px rgba(27,46,27,0.12);
+  --shadow-glow-blue: 0 0 16px rgba(46,125,50,0.12);
+  --shadow-glow-cyan: 0 0 16px rgba(15,118,110,0.12);
+}
+
+/* ----- Night Blue Theme Tokens（夜间蓝，暗色系） ---------- */
+[data-theme="night"] {
+  --bg-deepest: #091223;
+  --bg-deep: #0E1930;
+  --bg-default: #12213C;
+  --bg-elevated: #172A4A;
+  --bg-overlay: #172A4A;
+  --bg-raised: #1F3559;
+
+  --border-default: #24395E;
+  --border-emphasis: #33507F;
+  --border-active: #5B8DEF;
+  --border-focus: #5B8DEF;
+
+  --text-primary: #E6EDFA;
+  --text-secondary: #9DB0D0;
+  --text-muted: #63779C;
+  --text-inverse: #0E1930;
+  --text-disabled: #3A4E74;
+
+  --accent-blue: #5B8DEF;
+  --accent-cyan: #22D3EE;
+  --accent-green: #34D399;
+  --accent-amber: #FBBF24;
+  --accent-red: #F87171;
+  --accent-green-subtle: rgba(52, 211, 153, 0.12);
+  --accent-purple: #A78BFA;
+  --accent-pink: #F472B6;
+
+  --status-online: #34D399;
+  --status-offline: #F87171;
+  --status-warning: #FBBF24;
+  --status-error: #F87171;
+  --status-idle: #63779C;
+
+  --type-server: #5B8DEF;
+  --type-switch: #22D3EE;
+  --type-router: #FBBF24;
+  --type-storage: #A78BFA;
+  --type-nas: #34D399;
+  --type-security: #F87171;
+  --type-loadbalancer: #F472B6;
+  --type-other: #64748B;
+
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.3);
+  --shadow-sm: 0 2px 4px rgba(0,0,0,0.35);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.45);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.55);
+  --shadow-glow-blue: 0 0 16px rgba(91,141,239,0.18);
+  --shadow-glow-cyan: 0 0 16px rgba(34,211,238,0.18);
+}
+
 /* ----- Reset & Base -------------------------------------- */
 *, *::before, *::after {
   box-sizing: border-box;
@@ -167,6 +271,16 @@ html {
 [data-theme="light"] html,
 html[data-theme="light"] {
   color-scheme: light;
+}
+
+[data-theme="eye"] html,
+html[data-theme="eye"] {
+  color-scheme: light;
+}
+
+[data-theme="night"] html,
+html[data-theme="night"] {
+  color-scheme: dark;
 }
 
 body {
@@ -317,6 +431,30 @@ body {
   border-color: var(--border-emphasis);
   color: var(--text-primary);
   transform: translateY(-1px);
+}
+
+/* N-15：主题选择菜单项（色点预览 + 当前项 ✓） */
+.theme-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 128px;
+}
+.theme-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-emphasis);
+}
+.theme-swatch--dark { background: linear-gradient(135deg, #1A1E2C 50%, #0F1117 50%); }
+.theme-swatch--light { background: linear-gradient(135deg, #FFFFFF 50%, #F3F4F6 50%); }
+.theme-swatch--eye { background: linear-gradient(135deg, #FFFFFF 50%, #EEF5EA 50%); border-color: #C5D8BC; }
+.theme-swatch--night { background: linear-gradient(135deg, #172A4A 50%, #0E1930 50%); }
+.theme-check {
+  margin-left: auto;
+  color: var(--accent-blue);
+  font-weight: 700;
 }
 /* ============================================================
    ROOM TABS �?Excel-style sheet tabs
