@@ -5,7 +5,7 @@ import type { Device } from '../types';
  * N-14 设备二维码内容编码（纯函数，无副作用，可单测）
  * ============================================================================
  *
- * ## 编码格式 v2（当前，稳定契约，勿随意变更）
+ * ## 编码格式（稳定契约，勿随意变更）
  *
  * ```
  * RV|<设备ID>|<设备名称>|<型号>|<资产编号>|<序列号>
@@ -24,15 +24,6 @@ import type { Device } from '../types';
  * RV|7|核心交换机|Cisco 9300||                  // 资产编号、序列号为空
  * ```
  *
- * ## 编码格式 v1（历史，仅解析兼容）
- *
- * ```
- * RV|<设备ID>|<资产编号>|<序列号>          // 4 段，无 name/model
- * ```
- *
- * 早期打印的旧标签仍可被 {@link parseDeviceQr} 解析（`name`/`model` 返回空串），
- * 旧标签不会因格式升级而解析失败。
- *
  * ## 转义规则（防字段内混入分隔符造成解析歧义）
  *
  * **所有自由文本字段（名称 / 型号 / 资产编号 / 序列号）**都要转义——设备名称里完全可能含 `|`：
@@ -50,19 +41,16 @@ export const QR_PREFIX = 'RV';
 /** 字段分隔符：竖线 U+007C */
 export const QR_FIELD_SEP = '|';
 
-/** v2 载荷固定段数（前缀 + id + 名称 + 型号 + 资产编号 + 序列号） */
+/** 载荷固定段数（前缀 + id + 名称 + 型号 + 资产编号 + 序列号） */
 export const QR_FIELD_COUNT = 6;
-
-/** v1 载荷固定段数（前缀 + id + 资产编号 + 序列号），仅用于解析兼容 */
-export const QR_FIELD_COUNT_V1 = 4;
 
 /** 解析后的二维码载荷 */
 export interface DeviceQrPayload {
   /** 设备ID；无法解析或为空时为 `null` */
   id: number | null;
-  /** 设备名称（已还原转义）；v1 旧载荷或缺失时为 `''` */
+  /** 设备名称（已还原转义）；缺失时为 `''` */
   name: string;
-  /** 型号名称（已还原转义）；v1 旧载荷或缺失时为 `''` */
+  /** 型号名称（已还原转义）；缺失时为 `''` */
   model: string;
   /** 资产编号（已还原转义）；缺失时为 `''` */
   asset_no: string;
@@ -144,7 +132,7 @@ function parseId(raw: string): number | null {
 }
 
 /**
- * 编码设备二维码内容（v2）。
+ * 编码设备二维码内容。
  * @param device 至少包含 `id` / `name` / `asset_no` / `serial_no`，`model` 可选（型号名称）
  * @returns 形如 `RV|<id>|<name>|<model>|<asset_no>|<serial_no>` 的明文载荷
  */
@@ -159,7 +147,6 @@ export function encodeDeviceQr(device: QrDeviceInput): string {
 
 /**
  * 解析二维码内容（{@link encodeDeviceQr} 的逆函数），用于自检 / 往返测试 / 未来扫码入口。
- * 兼容 v2（6 段）与 v1（4 段）两种载荷。
  * @param content 二维码明文内容
  * @returns 解析结果；前缀或段数不符时返回 `null`
  */
@@ -168,24 +155,13 @@ export function parseDeviceQr(content: string): DeviceQrPayload | null {
   if (parts[0] !== QR_PREFIX) return null;
 
   if (parts.length === QR_FIELD_COUNT) {
-    // v2：RV | id | name | model | asset_no | serial_no
+    // RV | id | name | model | asset_no | serial_no
     return {
       id: parseId(parts[1]),
       name: unescapeQrField(parts[2]),
       model: unescapeQrField(parts[3]),
       asset_no: unescapeQrField(parts[4]),
       serial_no: unescapeQrField(parts[5]),
-    };
-  }
-
-  if (parts.length === QR_FIELD_COUNT_V1) {
-    // v1 旧载荷：RV | id | asset_no | serial_no（无 name/model）
-    return {
-      id: parseId(parts[1]),
-      name: '',
-      model: '',
-      asset_no: unescapeQrField(parts[2]),
-      serial_no: unescapeQrField(parts[3]),
     };
   }
 
