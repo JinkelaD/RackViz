@@ -30,6 +30,11 @@ pub struct DbState {
 
 impl DbState {
     pub fn new(db_path: &std::path::Path, app_handle: AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
+        // N-18：启动时若存在待恢复数据库，**先于打开连接池**完成文件交换
+        // （清理 -wal/-shm 并以暂存文件替换主库），迁移随后由既有路径自然接管。
+        if let Err(e) = crate::backup::apply_pending_restore(db_path) {
+            log::error!("应用待恢复数据库失败（将继续使用当前数据库）: {}", e);
+        }
         let db_str = db_path.to_str().ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, "数据库路径包含非法字符")
         })?;

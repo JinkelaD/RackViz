@@ -6,6 +6,7 @@ mod db;
 mod commands;
 mod excel;
 mod report;
+mod backup;
 mod logging;
 
 use state::DbState;
@@ -67,6 +68,8 @@ pub fn run() {
             commands::exports::export_single_rack_excel,
             commands::exports::export_report_html,
             commands::exports::import_excel_from_path,
+            commands::maintenance::backup_database,
+            commands::maintenance::restore_database,
             commands::settings::get_logging_config,
             commands::settings::set_logging_enabled,
             commands::settings::open_log_dir,
