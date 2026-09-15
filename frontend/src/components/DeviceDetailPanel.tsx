@@ -1,6 +1,9 @@
+import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { App } from 'antd';
 import { Device, DeviceModel, Rack } from '../types';
 import { DEVICE_TYPE_LABELS, getStatusText, safeDeviceType } from '../constants/labels';
+import DeviceQrLabel from './device/DeviceQrLabel';
 
 interface DeviceDetailPanelProps {
   selectedDeviceInfo: {
@@ -21,7 +24,15 @@ export default function DeviceDetailPanel({
 }: DeviceDetailPanelProps) {
   const { modal } = App.useApp();
 
+  // N-14：二维码标签展开状态（详情面板内联预览 + body 级打印根）
+  const [qrOpen, setQrOpen] = useState(false);
+
   if (!selectedDeviceInfo) return null;
+
+  /** 触发系统打印；`@media print` 下仅保留二维码标签 */
+  const handlePrintQr = () => {
+    window.print();
+  };
 
   const handleRemoveDevice = () => {
     modal.confirm({
@@ -111,6 +122,31 @@ export default function DeviceDetailPanel({
             >未上架</button>
           </div>
         </div>
+        <div className="detail-qr">
+          <button
+            className={`detail-qr-toggle${qrOpen ? ' active' : ''}`}
+            onClick={() => setQrOpen(v => !v)}
+            aria-expanded={qrOpen}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+              <line x1="14" y1="14" x2="14" y2="17"/><line x1="14" y1="21" x2="17" y2="21"/><line x1="21" y1="14" x2="21" y2="17"/><line x1="21" y1="21" x2="21" y2="21"/>
+            </svg>
+            二维码标签
+            <span className="detail-qr-caret">{qrOpen ? '▲' : '▼'}</span>
+          </button>
+          {qrOpen && (
+            <div className="qr-label-area">
+              <DeviceQrLabel device={selectedDeviceInfo.device} modelName={selectedDeviceInfo.model?.name} />
+              <button className="detail-btn qr-print-btn" onClick={handlePrintQr}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>
+                </svg>
+                打印标签
+              </button>
+            </div>
+          )}
+        </div>
         <div className="detail-actions">
           <button className="detail-btn" onClick={onClose}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -126,6 +162,13 @@ export default function DeviceDetailPanel({
           </button>
         </div>
       </div>
+      {/* N-14：body 级打印根（portal）。屏幕下隐藏，@media print 下仅保留此标签 */}
+      {qrOpen && createPortal(
+        <div className="qr-print-root">
+          <DeviceQrLabel device={selectedDeviceInfo.device} modelName={selectedDeviceInfo.model?.name} />
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

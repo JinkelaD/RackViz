@@ -2558,3 +2558,161 @@ body {
 .import-summary-errors {
   color: var(--accent-red);
 }
+
+/* ============================================================
+   N-14 设备二维码标签（详情面板入口 + 打印）
+   ============================================================ */
+.detail-qr {
+  margin-top: var(--space-3);
+  border-top: 1px solid var(--border-default);
+  padding-top: var(--space-3);
+}
+.detail-qr-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+.detail-qr-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--border-emphasis);
+  background: var(--bg-raised);
+}
+.detail-qr-toggle.active {
+  color: var(--accent-blue);
+  border-color: var(--border-active);
+}
+.detail-qr-caret { margin-left: auto; font-size: 10px; }
+
+.qr-label-area {
+  margin-top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.qr-print-btn { width: 100%; justify-content: center; }
+
+/* 标签纸：屏幕预览与打印共用同一结构 */
+.qr-label-sheet {
+  width: 260px;
+  max-width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  color: var(--text-primary);
+}
+.qr-label-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-default);
+  padding-bottom: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+.qr-label-brand {
+  font-weight: 700;
+  font-size: var(--text-sm);
+  color: var(--accent-blue);
+  letter-spacing: 0.02em;
+}
+.qr-label-title {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.qr-label-body {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+.qr-label-code {
+  flex: 0 0 auto;
+  line-height: 0;
+}
+.qr-label-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.qr-label-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qr-label-row {
+  display: flex;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+.qr-label-key {
+  flex: 0 0 52px;
+  color: var(--text-muted);
+}
+.qr-label-val {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qr-label-mono { font-family: var(--font-mono); }
+
+/* body 级打印根：屏幕下不渲染任何内容 */
+.qr-print-root { display: none; }
+
+/* ============================================================
+   N-14 打印布局：只输出二维码标签
+   ============================================================ */
+@media print {
+  @page { margin: 12mm; }
+
+  /* 1) 应用外壳整体隐去（顶栏 #header / 主区 #main / 侧栏 #sidebar / 状态栏 .statusbar / 表格 .ant-table-wrapper 全在其中） */
+  #root { display: none !important; }
+
+  /* 2) antd 由 portal 挂到 body 的浮层逐一隐去：模态/抽屉/确认框/全局提示/气泡/下拉 */
+  .ant-modal-root,
+  .ant-modal-mask,
+  .ant-drawer,
+  .ant-drawer-mask,
+  .ant-message,
+  .ant-notification,
+  .ant-tooltip,
+  .ant-dropdown,
+  .ant-picker-dropdown,
+  .ant-wave { display: none !important; }
+
+  /* 3) 仅保留 body 级二维码标签根 */
+  .qr-print-root { display: block !important; }
+
+  /* 4) 打印介质为白纸：为在 4 套主题下都清晰可读、可扫，标签强制白底黑字 */
+  .qr-label-sheet {
+    width: auto;
+    max-width: none;
+    background: #FFFFFF;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+  }
+  .qr-label-sheet,
+  .qr-label-sheet * { color: #000000 !important; }
+  .qr-label-head { border-bottom-color: #000000 !important; }
+}
+
