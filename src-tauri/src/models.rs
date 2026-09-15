@@ -321,7 +321,6 @@ pub struct DeleteBatchResult {
 /// 备份/恢复结果（N-18）。
 ///
 /// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**。
-#[allow(dead_code)] // 由 T2.6（备份恢复）消费
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RestoreResult {
     /// 是否需重启应用方可生效
