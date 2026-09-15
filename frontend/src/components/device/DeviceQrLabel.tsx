@@ -20,10 +20,16 @@ const QR_SIZE = 132;
  * 即指此选择。
  *
  * 标签结构：左侧二维码，右侧设备可读文字（名称/型号/资产编号/序列号/设备ID）；
- * 采用固定尺寸 + 文本溢出省略，长名称不会撑破标签。
+ * 文本允许换行、不截断（窄面板下标签变高而非省略信息），二维码尺寸固定以保证可扫率。
  */
 export default function DeviceQrLabel({ device, modelName }: DeviceQrLabelProps) {
-  const content = encodeDeviceQr(device);
+  const content = encodeDeviceQr({
+    id: device.id,
+    name: device.name,
+    asset_no: device.asset_no,
+    serial_no: device.serial_no,
+    model: modelName,
+  });
   const assetNo = device.asset_no?.trim() || '-';
   const serialNo = device.serial_no?.trim() || '-';
 

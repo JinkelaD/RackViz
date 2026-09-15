@@ -150,5 +150,5 @@ export interface ImportProgress {
   phase: 'parsing' | 'importing' | 'done';
 }
 
-/** N-15 主题预设（供后续多主题迭代使用；本轮仅类型占位） */
-export type ThemePreset = 'dark' | 'light' | 'eye' | 'night';
+/** N-15 主题预设（精简为 2 套）：`night`=夜间蓝（暗色/默认）、`eye`=护眼绿（亮色） */
+export type ThemePreset = 'night' | 'eye';
