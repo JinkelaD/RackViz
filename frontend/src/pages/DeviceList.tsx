@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
+import type { Key } from 'react';
 import { Table, Button, Input, Popover, Checkbox, App, Dropdown } from 'antd';
-import { PlusOutlined, SettingOutlined, ColumnHeightOutlined, UploadOutlined, ExportOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PlusOutlined, SettingOutlined, ColumnHeightOutlined, UploadOutlined, ExportOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useDevices } from '../hooks/useDevices';
 import { useDeviceModels } from '../hooks/useDeviceModels';
 import { useRacks } from '../hooks/useRacks';
@@ -10,11 +11,16 @@ import { useRoomContext } from '../contexts/RoomContext';
 import * as tauriApi from '../tauri-api';
 import DeviceFormModal from '../components/device/DeviceFormModal';
 import ModelManageModal from '../components/device/ModelManageModal';
+import TrashDrawer from '../components/device/TrashDrawer';
+import ImportWizardModal from '../components/device/ImportWizardModal';
 import ResizableTitle from '../components/device/ResizableTitle';
 import { ALL_COLUMNS, DEFAULT_COLUMN_WIDTHS, buildDeviceColumns, DeviceColumnKey } from '../components/device/deviceColumns';
 
+/** N-20：单次批量删除上限（与后端 1000 校验一致） */
+const MAX_BATCH_DELETE = 1000;
+
 export default function DeviceList() {
-  const { devices, loading, refresh, remove, create, update } = useDevices();
+  const { devices, loading, refresh, remove, create, update, removeMany } = useDevices();
   const { models, create: createModel, update: updateModel, remove: removeModel } = useDeviceModels();
   const { racks } = useRacks();
   const { rooms } = useRooms();
@@ -33,11 +39,16 @@ export default function DeviceList() {
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
 
   const [modelModalVisible, setModelModalVisible] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [importWizardOpen, setImportWizardOpen] = useState(false);
+
+  // N-20：选区（以 id 集合维护，preserveSelectedRowKeys 支持跨页/排序/搜索保持）
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
+  const [batchDeleting, setBatchDeleting] = useState(false);
 
   const [visibleColumns, setVisibleColumns] = useState<DeviceColumnKey[]>(
     ALL_COLUMNS.map(c => c.key)
   );
-  const [importing, setImporting] = useState(false);
 
   const [columnWidths, setColumnWidths] = useState<Record<DeviceColumnKey, number>>(
     () => ALL_COLUMNS.reduce((acc, c) => {
@@ -53,28 +64,6 @@ export default function DeviceList() {
   useEffect(() => {
     setCurrentPage(1);
   }, [searchText, selectedRoomId]);
-
-  const handleDeviceImport = async () => {
-    setImporting(true);
-    try {
-      const result = await tauriApi.importExcelFromPath();
-      const parts = [`成功 ${result.imported} 条`];
-      if (result.skipped > 0) parts.push(`跳过重复 ${result.skipped} 条`);
-      if (result.errors.length > 0) parts.push(`失败 ${result.errors.length} 条`);
-      if (result.errors.length > 0) {
-        message.warning(`导入完成：${parts.join('，')}`);
-      } else if (result.skipped > 0) {
-        message.info(`导入完成：${parts.join('，')}`);
-      } else {
-        message.success(`成功导入 ${result.imported} 条设备`);
-      }
-      refresh();
-    } catch {
-      message.error('导入失败，请检查文件格式');
-    } finally {
-      setImporting(false);
-    }
-  };
 
   const showDeviceModal = useCallback((device?: Device) => {
     setEditingDevice(device ?? null);
@@ -107,16 +96,88 @@ export default function DeviceList() {
     setModelModalVisible(false);
   };
 
+  // 单条删除：保持既有乐观更新语义（N-09 已改为软删，提示文案相应更新）
   const handleDeleteDevice = useCallback((device: Device) => {
     modal.confirm({
       title: '确认删除',
-      content: `确定要删除设备「${device.name}」吗？此操作不可撤销。`,
+      content: `确定要删除设备「${device.name}」吗？删除后可在 30 天内在「回收站」恢复。`,
       okText: '删除',
       okType: 'danger',
       cancelText: '取消',
       onOk: () => remove(device.id),
     });
   }, [modal, remove]);
+
+  // ---------- N-20 批量删除：选区派生 ----------
+  const selectedDevices = useMemo(
+    () => selectedRowKeys
+      .map(k => devices.find(d => d.id === Number(k)))
+      .filter((d): d is Device => Boolean(d)),
+    [selectedRowKeys, devices],
+  );
+  const onsiteSelectedCount = useMemo(
+    () => selectedDevices.filter(d => d.rack_id != null).length,
+    [selectedDevices],
+  );
+
+  const handleBatchDelete = useCallback(() => {
+    // ① 空选区拦截（操作条仅在选区非空时渲染，此处兜底）
+    // ② 前端 id 去重
+    const ids = Array.from(new Set(selectedRowKeys.map(Number)));
+    if (ids.length === 0) {
+      message.warning('请先选择要删除的设备');
+      return;
+    }
+    // ③ 上限 1000 拦截
+    if (ids.length > MAX_BATCH_DELETE) {
+      message.error(`单次批量删除最多 ${MAX_BATCH_DELETE} 台，请分批操作`);
+      return;
+    }
+    // ④ 在架设备计数警告
+    const onsiteCount = selectedDevices.filter(d => d.rack_id != null).length;
+
+    modal.confirm({
+      title: '确认批量删除',
+      content: (
+        <div className="batch-delete-confirm">
+          <p>确定要删除选中的 {ids.length} 台设备吗？</p>
+          {onsiteCount > 0 && (
+            <p className="batch-delete-warn">⚠️ 其中 {onsiteCount} 台在架，删除后对应 U 位将被释放。</p>
+          )}
+          <p>删除后可在 30 天内在「回收站」恢复；超期不可恢复。</p>
+        </div>
+      ),
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        // ⑤ 提交中禁用防重复（submitting）
+        setBatchDeleting(true);
+        try {
+          const result = await removeMany(ids);
+          // ⑧ 成功后清空选区
+          setSelectedRowKeys([]);
+          if (result.not_found.length > 0) {
+            // ⑥ not_found 非空提示
+            message.warning(`已删除 ${result.deleted} 台，${result.not_found.length} 台不存在已跳过`);
+          } else {
+            message.success(`已删除 ${result.deleted} 台设备`);
+          }
+        } catch (err) {
+          // ⑦ 事务失败（后端整体回滚）：本地列表不变 + message.error（不 rethrow → 弹窗关闭）
+          message.error(`批量删除失败：${tauriApi.errorMessage(err)}`);
+        } finally {
+          setBatchDeleting(false);
+        }
+      },
+    });
+  }, [selectedRowKeys, selectedDevices, modal, message, removeMany]);
+
+  const rowSelection = {
+    selectedRowKeys,
+    preserveSelectedRowKeys: true,
+    onChange: (keys: Key[]) => setSelectedRowKeys(keys),
+  };
 
   const filteredDevices = useMemo(() => devices.filter(d => {
     if (!d.name.toLowerCase().includes(searchText.toLowerCase())) return false;
@@ -173,9 +234,12 @@ export default function DeviceList() {
           <Button onClick={() => setModelModalVisible(true)} icon={<SettingOutlined />}>
             型号管理
           </Button>
-          <Button icon={<UploadOutlined />} loading={importing} onClick={handleDeviceImport}>
+          <Button icon={<UploadOutlined />} onClick={() => setImportWizardOpen(true)}>
               导入
-            </Button>
+          </Button>
+          <Button icon={<DeleteOutlined />} onClick={() => setTrashOpen(true)}>
+              回收站
+          </Button>
           <Dropdown
             menu={{
               items: [
@@ -206,6 +270,24 @@ export default function DeviceList() {
         </div>
       </div>
 
+      {/* N-20 选区操作条：仅在有选区时渲染，无选区不占位 */}
+      {selectedRowKeys.length > 0 && (
+        <div className="device-list-selection-bar">
+          <span className="selection-info">已选 <b>{selectedRowKeys.length}</b> 台</span>
+          {onsiteSelectedCount > 0 && (
+            <span className="selection-onsite">其中 {onsiteSelectedCount} 台在架</span>
+          )}
+          <div className="selection-actions">
+            <Button type="primary" danger loading={batchDeleting} disabled={batchDeleting} onClick={handleBatchDelete}>
+              批量删除
+            </Button>
+            <Button disabled={batchDeleting} onClick={() => setSelectedRowKeys([])}>
+              取消选择
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div className="device-list-table-wrap">
         <Table
           dataSource={filteredDevices}
@@ -213,6 +295,7 @@ export default function DeviceList() {
           components={components}
           loading={loading}
           rowKey="id"
+          rowSelection={rowSelection}
           pagination={{
             current: currentPage,
             pageSize,
@@ -246,6 +329,18 @@ export default function DeviceList() {
         createModel={createModel}
         updateModel={updateModel}
         removeModel={removeModel}
+      />
+
+      <TrashDrawer
+        open={trashOpen}
+        onClose={() => setTrashOpen(false)}
+        onRestored={refresh}
+      />
+
+      <ImportWizardModal
+        open={importWizardOpen}
+        onClose={() => setImportWizardOpen(false)}
+        onImported={refresh}
       />
     </div>
   );

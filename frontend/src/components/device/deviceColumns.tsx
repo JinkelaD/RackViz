@@ -3,7 +3,7 @@ import { EditOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { Device, DeviceModel, Rack, Room } from '../../types';
 
-export type DeviceColumnKey = 'name' | 'model' | 'rack' | 'room' | 'position' | 'ip' | 'asset_no' | 'department' | 'owner' | 'status' | 'action';
+export type DeviceColumnKey = 'name' | 'model' | 'rack' | 'room' | 'position' | 'ip' | 'asset_no' | 'department' | 'owner' | 'status' | 'created_at' | 'updated_at' | 'action';
 
 export const ALL_COLUMNS: { key: DeviceColumnKey; title: string }[] = [
   { key: 'name', title: '设备名称' },
@@ -16,6 +16,8 @@ export const ALL_COLUMNS: { key: DeviceColumnKey; title: string }[] = [
   { key: 'department', title: '使用部门' },
   { key: 'owner', title: '责任人' },
   { key: 'status', title: '状态' },
+  { key: 'created_at', title: '创建时间' },
+  { key: 'updated_at', title: '更新时间' },
   { key: 'action', title: '操作' },
 ];
 
@@ -30,8 +32,19 @@ export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   department: 120,
   owner: 100,
   status: 90,
+  created_at: 150,
+  updated_at: 150,
   action: 90,
 };
+
+/** ISO8601(UTC) → 本地 "YYYY-MM-DD HH:mm"；非法/空值原样兜底 */
+function formatTimestamp(v: string | null): string {
+  if (!v) return '-';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return v;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 function getStatusTag(status: string) {
   const colors: Record<string, string> = {
@@ -87,6 +100,22 @@ export function buildDeviceColumns(
     { title: '使用部门', dataIndex: 'department', key: 'department', render: (dept: string) => dept || '-', sorter: (a, b) => (a.department || '').localeCompare(b.department || '', 'zh') },
     { title: '责任人', dataIndex: 'owner', key: 'owner', render: (owner: string) => owner || '-', sorter: (a, b) => (a.owner || '').localeCompare(b.owner || '', 'zh') },
     { title: '状态', dataIndex: 'status', key: 'status', render: (status: string) => getStatusTag(status), sorter: (a, b) => a.status.localeCompare(b.status) },
+    {
+      title: '创建时间',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      width: 150,
+      render: (v: string | null) => formatTimestamp(v),
+      sorter: (a, b) => (a.created_at || '').localeCompare(b.created_at || ''),
+    },
+    {
+      title: '更新时间',
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      width: 150,
+      render: (v: string | null) => formatTimestamp(v),
+      sorter: (a, b) => (a.updated_at || '').localeCompare(b.updated_at || ''),
+    },
     {
       title: '操作', key: 'action', fixed: 'right' as const,
       render: (_: unknown, record: Device) => (

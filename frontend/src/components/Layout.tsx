@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { App, Button, Space } from 'antd';
+import { open } from '@tauri-apps/plugin-dialog';
 import { useTheme } from '../contexts/ThemeContext';
 import { ViewProvider } from '../contexts/ViewContext';
 import { RoomProvider } from '../contexts/RoomContext';
@@ -8,12 +10,17 @@ import * as tauriApi from '../tauri-api';
 export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { modal, message } = App.useApp();
 
   // 设置弹窗 & 日志配置
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [loggingEnabled, setLoggingEnabled] = useState(false);
   const [logDir, setLogDir] = useState('');
   const [loggingLoading, setLoggingLoading] = useState(false);
+
+  // N-18 备份 / 恢复
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [restoreLoading, setRestoreLoading] = useState(false);
 
   const { theme: currentTheme, toggle: toggleTheme } = useTheme();
 
@@ -47,6 +54,68 @@ export default function Layout() {
       console.error('打开日志目录失败:', err);
     }
   };
+
+  // N-18：一键备份（Rust 侧弹原生保存对话框，返回备份文件路径）
+  const handleBackup = async () => {
+    setBackupLoading(true);
+    try {
+      const path = await tauriApi.backupDatabase();
+      message.success(`备份完成：${path}`);
+    } catch (err) {
+      message.error(`备份失败：${tauriApi.errorMessage(err)}`);
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
+  // N-18：从备份恢复（选文件 → 二次确认 → 延迟恢复 + 提示重启）
+  const handleRestore = async () => {
+    let path: string;
+    try {
+      const selected = await open({
+        filters: [{ name: '数据库备份', extensions: ['db', 'sqlite', 'sqlite3'] }],
+        multiple: false,
+      });
+      if (!selected) return;
+      path = typeof selected === 'string' ? selected : String((selected as { path?: string }).path ?? '');
+    } catch (err) {
+      message.error(`选择备份文件失败：${tauriApi.errorMessage(err)}`);
+      return;
+    }
+
+    modal.confirm({
+      title: '确认从备份恢复',
+      content: (
+        <div>
+          <p>恢复将<b>覆盖当前全部数据</b>，此操作不可撤销。</p>
+          <p>恢复后需要重启应用才能生效，请先确认已保存当前工作。</p>
+        </div>
+      ),
+      okText: '恢复',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        setRestoreLoading(true);
+        try {
+          const res = await tauriApi.restoreDatabase(path);
+          if (res.restart_required) {
+            modal.info({
+              title: '恢复已准备，请重启应用',
+              content: res.message || '数据恢复已完成准备，请关闭并重新打开应用以生效。',
+              okText: '我知道了',
+            });
+          } else {
+            message.success(res.message || '恢复完成');
+          }
+        } catch (err) {
+          message.error(`恢复失败：${tauriApi.errorMessage(err)}`);
+        } finally {
+          setRestoreLoading(false);
+        }
+      },
+    });
+  };
+
 
   const navItems = [
     { path: '/racks', label: '机柜管理' },
@@ -143,6 +212,26 @@ export default function Layout() {
                         </button>
                       </div>
                     )}
+                  </div>
+
+                  <div className="settings-section">
+                    <div className="settings-section-title">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                      </svg>
+                      数据备份与恢复
+                    </div>
+                    <p className="settings-desc">
+                      备份将导出当前数据库的一致性快照文件；从备份恢复会覆盖当前全部数据，恢复后需重启应用生效。
+                    </p>
+                    <Space>
+                      <Button onClick={handleBackup} loading={backupLoading} disabled={restoreLoading}>
+                        备份数据库
+                      </Button>
+                      <Button danger onClick={handleRestore} loading={restoreLoading} disabled={backupLoading}>
+                        从备份恢复
+                      </Button>
+                    </Space>
                   </div>
                 </div>
               </div>

@@ -2323,3 +2323,100 @@ body {
   color: var(--accent-cyan);
   border-color: var(--accent-cyan);
 }
+
+/* ═══════════════════════════════════════════════════════════
+   N-20 设备台账：选区操作条（.device-list-toolbar 正下方、表格之上）
+   仅在有选区时渲染；所有颜色走主题变量，禁止硬编码色值（§8-10）
+   ═══════════════════════════════════════════════════════════ */
+.device-list-selection-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 8px 14px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-emphasis);
+  box-shadow: var(--shadow-sm);
+  flex-shrink: 0;
+}
+.device-list-selection-bar .selection-info {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.device-list-selection-bar .selection-info b {
+  color: var(--accent-blue);
+  font-weight: 700;
+  margin: 0 2px;
+}
+.device-list-selection-bar .selection-onsite {
+  font-size: var(--text-sm);
+  color: var(--accent-red);
+  font-weight: 600;
+}
+.device-list-selection-bar .selection-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+/* N-20 批量删除确认弹窗：在架设备警告 */
+.batch-delete-confirm p {
+  margin: 4px 0;
+}
+.batch-delete-warn {
+  color: var(--accent-red);
+  font-weight: 600;
+}
+
+/* N-09 回收站：剩余可恢复天数配色 */
+.trash-days-normal {
+  color: var(--accent-green);
+  font-weight: 600;
+}
+.trash-days-warning {
+  color: var(--accent-amber);
+  font-weight: 600;
+}
+.trash-days-expired {
+  color: var(--text-muted);
+}
+
+/* N-04/N-06 导入向导 */
+.import-wizard-file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: 8px;
+}
+.import-wizard-path {
+  flex: 1;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.import-summary {
+  font-size: 13px;
+  line-height: 1.8;
+}
+.import-summary b {
+  color: var(--accent-blue);
+  font-weight: 700;
+  margin: 0 2px;
+}
+.import-summary-warnings {
+  color: var(--accent-amber);
+}
+.import-summary-warnings ul,
+.import-summary-errors ul {
+  margin: 4px 0 0 0;
+  padding-left: 18px;
+  max-height: 160px;
+  overflow: auto;
+}
+.import-summary-errors {
+  color: var(--accent-red);
+}
