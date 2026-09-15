@@ -373,4 +373,28 @@ mod tests {
         let html = render_report(&conn).unwrap();
         assert!(html.contains("暂无设备数据"));
     }
+
+    /// 点 1：报表「机房 U 位占用聚合」不得计入软删设备占用的 U 位。
+    #[test]
+    fn test_report_occupancy_excludes_soft_deleted() {
+        let conn = setup_db();
+        db::rooms::insert_room(&conn, &crate::models::RoomCreate { name: "B机房".into(), ..Default::default() }).unwrap();
+        db::racks::insert_rack(&conn, &crate::models::RackCreate {
+            name: "RB".into(), room_id: Some(1), height_u: Some(10), ..Default::default()
+        }).unwrap();
+        let dev = db::devices::insert_device(&conn, &DeviceCreate {
+            name: "OCC-REP".into(), rack_id: Some(1), start_u: Some(1), end_u: Some(4),
+            ..Default::default()
+        }).unwrap();
+
+        // 未软删：占用率 4/10 = 40%
+        let html_active = render_report(&conn).unwrap();
+        assert!(html_active.contains("40%"), "在用设备：占用率应为 40%");
+
+        // 软删后：不得再计入占用率，也不得出现在报表正文
+        db::devices::soft_delete_device(&conn, dev.id).unwrap();
+        let html_deleted = render_report(&conn).unwrap();
+        assert!(!html_deleted.contains("40%"), "软删设备的 U 位不得计入机房占用率");
+        assert!(!html_deleted.contains("OCC-REP"), "软删设备不得出现在报表");
+    }
 }

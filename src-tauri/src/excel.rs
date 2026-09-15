@@ -980,4 +980,89 @@ mod tests {
         let buf2 = export_racks_excel(&conn).unwrap();
         assert!(!buf2.is_empty());
     }
+
+    // ==================== Stage 2A 对抗性验证（QA 补充） ====================
+
+    /// 读取 xlsx 全部工作表的所有单元格文本（用于断言导出内容）。
+    fn read_all_cells(path: &std::path::Path) -> Vec<String> {
+        use calamine::{open_workbook, Reader, Xlsx};
+        let mut wb: Xlsx<_> = open_workbook(path).unwrap();
+        let mut out = Vec::new();
+        for name in wb.sheet_names().to_owned() {
+            if let Ok(range) = wb.worksheet_range(&name) {
+                for row in range.rows() {
+                    for c in row {
+                        out.push(cell_to_string(c));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// 读取机柜部署图导出中「使用率」行的第 1 个机柜数值（百分比）。
+    fn read_usage_row(path: &std::path::Path) -> f64 {
+        use calamine::{open_workbook, Reader, Xlsx};
+        let mut wb: Xlsx<_> = open_workbook(path).unwrap();
+        let range = wb.worksheet_range("机柜部署图").unwrap();
+        for row in range.rows() {
+            let first = row.first().map(cell_to_string).unwrap_or_default();
+            if first == "使用率" {
+                return row.get(1).map(|c| match c {
+                    calamine::Data::Float(f) => *f,
+                    calamine::Data::Int(i) => *i as f64,
+                    _ => 0.0,
+                }).unwrap_or(0.0);
+            }
+        }
+        panic!("导出文件中未找到「使用率」行");
+    }
+
+    /// 点 1：设备台账导出必须排除软删设备（构造「软删设备名」不出现在导出内容中）。
+    #[test]
+    fn test_export_devices_data_excludes_soft_deleted() {
+        let conn = setup_db();
+        db::devices::insert_device(&conn, &DeviceCreate { name: "KEEP-EXP".into(), ..Default::default() }).unwrap();
+        let gone = db::devices::insert_device(&conn, &DeviceCreate { name: "GONE-EXP".into(), ..Default::default() }).unwrap();
+        db::devices::soft_delete_device(&conn, gone.id).unwrap();
+
+        let buf = export_devices_data_excel(&conn).unwrap();
+        let path = temp_xlsx_path("exp_softdel");
+        std::fs::write(&path, buf).unwrap();
+        let cells = read_all_cells(&path);
+        std::fs::remove_file(&path).ok();
+
+        assert!(cells.iter().any(|c| c == "KEEP-EXP"), "在用设备应出现在导出");
+        assert!(!cells.iter().any(|c| c == "GONE-EXP"), "软删设备不得出现在导出");
+    }
+
+    /// 点 1：机柜部署图导出的「使用率」不得计入软删设备占用的 U 位。
+    #[test]
+    fn test_export_racks_usage_excludes_soft_deleted() {
+        let conn = setup_db();
+        db::racks::insert_rack(&conn, &crate::models::RackCreate {
+            name: "RX".into(), height_u: Some(10), ..Default::default()
+        }).unwrap();
+        let dev = db::devices::insert_device(&conn, &DeviceCreate {
+            name: "OCC".into(), rack_id: Some(1), start_u: Some(1), end_u: Some(4),
+            ..Default::default()
+        }).unwrap();
+
+        // 未软删：使用率 4/10 = 40%
+        let buf = export_racks_excel(&conn).unwrap();
+        let p1 = temp_xlsx_path("rack_active");
+        std::fs::write(&p1, &buf).unwrap();
+        let usage_active = read_usage_row(&p1);
+        std::fs::remove_file(&p1).ok();
+        assert!((usage_active - 40.0).abs() < 0.01, "在用设备：使用率应为 40%，实际 {}", usage_active);
+
+        // 软删后：使用率应为 0%（不得计入占用）
+        db::devices::soft_delete_device(&conn, dev.id).unwrap();
+        let buf2 = export_racks_excel(&conn).unwrap();
+        let p2 = temp_xlsx_path("rack_deleted");
+        std::fs::write(&p2, &buf2).unwrap();
+        let usage_deleted = read_usage_row(&p2);
+        std::fs::remove_file(&p2).ok();
+        assert!(usage_deleted.abs() < 0.01, "软删后使用率应为 0%，实际 {}", usage_deleted);
+    }
 }

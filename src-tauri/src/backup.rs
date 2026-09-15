@@ -284,4 +284,82 @@ mod tests {
         assert!(!db_path.exists());
         let _ = fs::remove_dir_all(&dir);
     }
+
+    /// 点 8①：损坏文件（非 SQLite / 截断）必须被 `validate_backup` 拒绝。
+    #[test]
+    fn test_validate_backup_rejects_corrupted_file() {
+        let dir = temp_dir("corrupt");
+        // (a) 任意文本文件（非 SQLite）
+        let txt = dir.join("garbage.db");
+        fs::write(&txt, b"this is definitely not a sqlite database file").unwrap();
+        assert!(validate_backup(&txt).is_err(), "非 SQLite 文本文件应被拒绝");
+
+        // (b) 截断的合法库（仅保留头部若干字节 → 结构损坏）
+        let good = dir.join("good.db");
+        {
+            let conn = open_seeded(&good);
+            let _ = conn;
+        }
+        let bytes = fs::read(&good).unwrap();
+        let truncated = dir.join("truncated.db");
+        fs::write(&truncated, &bytes[..bytes.len().min(200)]).unwrap();
+        assert!(validate_backup(&truncated).is_err(), "截断的库文件应被拒绝");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 点 8①：`user_version` 高于当前程序支持版本的备份必须拒绝（防降级破坏数据）。
+    #[test]
+    fn test_validate_backup_rejects_higher_user_version() {
+        let dir = temp_dir("highver");
+        let db = dir.join("future.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+            migration::run(&conn).unwrap();
+            conn.execute("INSERT INTO devices (name) VALUES ('X')", []).unwrap();
+            // 伪造一个「未来版本」备份
+            conn.pragma_update(None, "user_version", 6).unwrap();
+        }
+        assert!(
+            validate_backup(&db).is_err(),
+            "版本高于当前程序（v6 > v5）的备份必须被拒绝"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 点 8③：换库时必须清理主库残留的 `-wal` / `-shm`，否则旧 WAL 会覆盖恢复后的数据。
+    #[test]
+    fn test_apply_pending_restore_cleans_wal_and_shm() {
+        let dir = temp_dir("walshm");
+        let db_path = dir.join("rackviz.db");
+        {
+            let conn = open_seeded(&db_path);
+            let _ = conn;
+        }
+        // 制造残留的 -wal / -shm
+        let wal = with_suffix(&db_path, "-wal");
+        let shm = with_suffix(&db_path, "-shm");
+        fs::write(&wal, b"stale-wal").unwrap();
+        fs::write(&shm, b"stale-shm").unwrap();
+        assert!(wal.exists() && shm.exists());
+
+        // 构造含 2 台设备的备份并暂存
+        let src_db = dir.join("src.db");
+        {
+            let conn = Connection::open(&src_db).unwrap();
+            migration::run(&conn).unwrap();
+            conn.execute("INSERT INTO devices (name) VALUES ('A'), ('B')", []).unwrap();
+            create_backup(&conn, &dir.join("src_vacuum.db")).unwrap();
+        }
+        stage_restore(&db_path, &dir.join("src_vacuum.db")).unwrap();
+        apply_pending_restore(&db_path).unwrap();
+
+        assert!(!wal.exists(), "换库后必须删除 -wal");
+        assert!(!shm.exists(), "换库后必须删除 -shm");
+        let conn = Connection::open(&db_path).unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM devices", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 2, "主库应被替换为备份内容");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

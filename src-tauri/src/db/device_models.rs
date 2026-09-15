@@ -227,4 +227,15 @@ mod tests {
         let model = get_device_model(&conn, id).unwrap().unwrap();
         assert_eq!(model.device_type, "router", "同名型号既有 type 不得被覆盖");
     }
+
+    /// 点 5：同名型号已存在 + `device_type = None`（旧文件）→ 复用 id，且绝不改动既有 type。
+    #[test]
+    fn test_find_or_create_model_existing_none_keeps_type() {
+        let conn = setup_db();
+        let id = find_or_create_model(&conn, "Keep", Some("switch")).unwrap();
+        let id2 = find_or_create_model(&conn, "Keep", None).unwrap();
+        assert_eq!(id, id2, "同名型号必须复用 id");
+        let m = get_device_model(&conn, id).unwrap().unwrap();
+        assert_eq!(m.device_type, "switch", "None 不得把既有 type 改回 server");
+    }
 }

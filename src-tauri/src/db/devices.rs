@@ -1022,4 +1022,236 @@ mod tests {
         assert_eq!(deleted, 0);
         assert_eq!(not_found, vec![a.id]);
     }
+
+    // ==================== Stage 2A 对抗性验证（QA 补充） ====================
+
+    /// 点 2②：`query_devices` 搜索对 `%` / `_` / `\` 三个 LIKE 通配符**全部**转义，
+    /// 含这些字符的设备名不会误命中「不含该字面字符」的记录。
+    #[test]
+    fn test_query_devices_escapes_all_like_wildcards() {
+        // 字面 `%`
+        let conn = setup_db();
+        let p = insert_device(&conn, &DeviceCreate { name: "HasPercent%Here".into(), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "HasPercentXHere".into(), ..Default::default() }).unwrap();
+        let (items, total) = query_devices(&conn, &DeviceQuery { search: Some("%".into()), ..Default::default() }).unwrap();
+        assert_eq!(total, 1, "搜索 % 只应命中含字面 % 的记录（不得当通配符）");
+        assert_eq!(items[0].id, p.id);
+
+        // 字面 `_`
+        let conn2 = setup_db();
+        let u = insert_device(&conn2, &DeviceCreate { name: "A_C".into(), ..Default::default() }).unwrap();
+        insert_device(&conn2, &DeviceCreate { name: "ABC".into(), ..Default::default() }).unwrap();
+        let (items2, total2) = query_devices(&conn2, &DeviceQuery { search: Some("_".into()), ..Default::default() }).unwrap();
+        assert_eq!(total2, 1, "搜索 _ 只应命中含字面 _ 的记录");
+        assert_eq!(items2[0].id, u.id);
+
+        // 字面 `\`（转义顺序若写反会在此暴露）
+        let conn3 = setup_db();
+        let b = insert_device(&conn3, &DeviceCreate { name: "back\\slash".into(), ..Default::default() }).unwrap();
+        insert_device(&conn3, &DeviceCreate { name: "backslash".into(), ..Default::default() }).unwrap();
+        let (items3, total3) = query_devices(&conn3, &DeviceQuery { search: Some("\\".into()), ..Default::default() }).unwrap();
+        assert_eq!(total3, 1, "搜索 \\ 只应命中含字面反斜杠的记录");
+        assert_eq!(items3[0].id, b.id);
+    }
+
+    /// 点 2①：`sort_order` 同样仅接受白名单；非法值安全降级为 ASC，且不破坏表结构。
+    #[test]
+    fn test_query_devices_sort_order_injection_safe() {
+        let conn = setup_db();
+        insert_device(&conn, &DeviceCreate { name: "Zeta".into(), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "Alpha".into(), ..Default::default() }).unwrap();
+
+        let (items, _) = query_devices(&conn, &DeviceQuery {
+            sort_field: Some("name".into()),
+            sort_order: Some("desc; DROP TABLE devices".into()),
+            ..Default::default()
+        }).unwrap();
+        // 非法 sort_order → 降级 ASC
+        assert_eq!(items[0].name, "Alpha");
+        assert_eq!(items[1].name, "Zeta");
+        // 表仍完好（注入未生效）
+        assert_eq!(list_devices(&conn, None, None).unwrap().len(), 2);
+    }
+
+    /// 点 2③：`include_deleted=true` 只在结果中多出软删记录，不外泄其它状态；
+    /// 返回集合恰好 = {active} ∪ {deleted}。
+    #[test]
+    fn test_query_devices_include_deleted_only_adds_deleted() {
+        let conn = setup_db();
+        let a = create_test_device(&conn, "A", None);
+        let b = create_test_device(&conn, "B", None);
+        let d = create_test_device(&conn, "D", None);
+        soft_delete_device(&conn, d.id).unwrap();
+
+        let (active, t0) = query_devices(&conn, &DeviceQuery::default()).unwrap();
+        assert_eq!(t0, 2);
+        let mut active_ids: Vec<i32> = active.iter().map(|x| x.id).collect();
+        active_ids.sort();
+        assert_eq!(active_ids, vec![a.id, b.id]);
+        assert!(active.iter().all(|x| x.deleted_at.is_none()), "默认查询不得返回任何已删记录");
+
+        let (all, t1) = query_devices(&conn, &DeviceQuery { include_deleted: Some(true), ..Default::default() }).unwrap();
+        assert_eq!(t1, 3);
+        let mut all_ids: Vec<i32> = all.iter().map(|x| x.id).collect();
+        all_ids.sort();
+        assert_eq!(all_ids, vec![a.id, b.id, d.id]);
+        // 恰好一条处于软删状态：既没漏记录，也没把 active 错标为删除
+        assert_eq!(all.iter().filter(|x| x.deleted_at.is_some()).count(), 1);
+    }
+
+    /// 点 2④：`total` 与 `items` 口径一致 —— 同一 WHERE，`total` 忽略 LIMIT/OFFSET。
+    #[test]
+    fn test_query_devices_total_consistent_with_items_where() {
+        let conn = setup_db();
+        insert_device(&conn, &DeviceCreate { name: "Multi-1".into(), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "Multi-2".into(), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "Multi-3".into(), ..Default::default() }).unwrap();
+
+        // 搜索命中 3 条，但只取 1 条：total 仍须为 3
+        let (items, total) = query_devices(&conn, &DeviceQuery {
+            search: Some("Multi".into()),
+            limit: Some(1),
+            offset: Some(0),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(total, 3, "total 应与 items 同 WHERE，不受 LIMIT 影响");
+    }
+
+    /// 点 3①：恢复窗口边界 —— 正好 30 天（含）内可恢复；31 天拒绝。
+    #[test]
+    fn test_restore_boundary_exactly_30_days_allowed() {
+        let conn = setup_db();
+        let dev = create_test_device(&conn, "Exact30", None);
+        soft_delete_device(&conn, dev.id).unwrap();
+        let past = (chrono::Utc::now() - chrono::Duration::days(30))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        conn.execute("UPDATE devices SET deleted_at = ?1 WHERE id = ?2", params![past, dev.id]).unwrap();
+        let restored = restore_device(&conn, dev.id).expect("正好 30 天仍在窗口内，应可恢复");
+        assert!(restored.deleted_at.is_none());
+    }
+
+    #[test]
+    fn test_restore_boundary_31_days_rejected() {
+        let conn = setup_db();
+        let dev = create_test_device(&conn, "Day31", None);
+        soft_delete_device(&conn, dev.id).unwrap();
+        let past = (chrono::Utc::now() - chrono::Duration::days(31))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        conn.execute("UPDATE devices SET deleted_at = ?1 WHERE id = ?2", params![past, dev.id]).unwrap();
+        assert!(restore_device(&conn, dev.id).is_err(), "超过 30 天必须拒绝恢复");
+    }
+
+    /// 点 3①（边界存疑）：删除时间 = 30 天 + 1 小时（严格超出 30 天窗口应拒绝）。
+    ///
+    /// 设计口径为「超过 30 天拒绝恢复」（§4.3 / §9 Q6）。当前实现以
+    /// `(Utc::now() - deleted_at).num_days() > 30` 比较，而 `num_days()` 对
+    /// Duration 向下取整加秒数，故「30 天零 1 小时」仍被算作 30 天 → 会被放行。
+    /// 本用例断言**设计意图**（应拒绝）；默认 `#[ignore]`，用
+    /// `cargo test -- --ignored` 单独跑可复现该偏差。
+    #[test]
+    #[ignore = "边界偏差：num_days() 取整使 30d+1h 仍可恢复，待裁决（见 QA 报告）"]
+    fn test_restore_boundary_just_over_30_days_should_reject() {
+        let conn = setup_db();
+        let dev = create_test_device(&conn, "OverByHour", None);
+        soft_delete_device(&conn, dev.id).unwrap();
+        let past = (chrono::Utc::now() - chrono::Duration::days(30) - chrono::Duration::hours(1))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        conn.execute("UPDATE devices SET deleted_at = ?1 WHERE id = ?2", params![past, dev.id]).unwrap();
+        assert!(
+            restore_device(&conn, dev.id).is_err(),
+            "删除已超过 30 天窗口，按设计应拒绝恢复"
+        );
+    }
+
+    /// 点 3②：恢复冲突预检必须覆盖**第二个**唯一键（asset_no），不能只查 serial_no。
+    #[test]
+    fn test_restore_conflict_on_asset_no_rejected() {
+        use crate::error::ErrorCode;
+        let conn = setup_db();
+        let old = insert_device(&conn, &DeviceCreate {
+            name: "OldAsset".into(),
+            asset_no: Some("AS-C".into()),
+            ..Default::default()
+        }).unwrap();
+        soft_delete_device(&conn, old.id).unwrap();
+
+        // 软删期间用同资产编号建了新设备（serial 不同，仅 asset 冲突）
+        insert_device(&conn, &DeviceCreate {
+            name: "NewAsset".into(),
+            asset_no: Some("AS-C".into()),
+            ..Default::default()
+        }).unwrap();
+
+        let err = restore_device(&conn, old.id).unwrap_err();
+        match err {
+            AppError { code: ErrorCode::Conflict, .. } => {}
+            other => panic!("期望 asset_no 冲突返回 Conflict，实际: {:?}", other),
+        }
+    }
+
+    /// 点 3③：恢复成功后 `deleted_at` 置空、`updated_at` 刷新为当前时刻。
+    #[test]
+    fn test_restore_refreshes_updated_at_and_clears_deleted_at() {
+        let conn = setup_db();
+        let dev = create_test_device(&conn, "RestoreStamp", None);
+        soft_delete_device(&conn, dev.id).unwrap();
+        // deleted_at 保持「刚删」（在窗口内）；仅把 updated_at 拨到历史值，观察是否刷新
+        conn.execute(
+            "UPDATE devices SET updated_at = '2000-01-01T00:00:00Z' WHERE id = ?1",
+            params![dev.id],
+        ).unwrap();
+
+        let restored = restore_device(&conn, dev.id).unwrap();
+        assert!(restored.deleted_at.is_none(), "恢复后 deleted_at 必须置空");
+        assert_ne!(
+            restored.updated_at.as_deref(),
+            Some("2000-01-01T00:00:00Z"),
+            "恢复后 updated_at 必须刷新为当前时刻"
+        );
+        assert!(restored.updated_at.is_some());
+    }
+
+    /// 点 4③（关键）：批量软删在**同一事务**内执行；任一环节失败 → 整体 ROLLBACK，不留部分删除。
+    /// 构造：同一事务内先批量软删 2 台，再触发唯一约束冲突使事务失败。
+    #[test]
+    fn test_delete_devices_batch_atomic_rollback() {
+        let conn = setup_db();
+        let a = create_test_device(&conn, "AtomicA", None);
+        let b = create_test_device(&conn, "AtomicB", None);
+        // 占位 active 设备，持有 SN-DUP
+        insert_device(&conn, &DeviceCreate {
+            name: "Holder".into(),
+            serial_no: Some("SN-DUP".into()),
+            ..Default::default()
+        }).unwrap();
+
+        let outcome: Result<(), AppError> = crate::db::with_transaction(&conn, |c| {
+            let (deleted, not_found) = delete_devices_batch(c, &[a.id, b.id])?;
+            assert_eq!(deleted, 2);
+            assert!(not_found.is_empty());
+            // 同一事务内制造失败：插入重复序列号 → 部分唯一索引拒绝
+            let _ = insert_device(c, &DeviceCreate {
+                name: "Dup".into(),
+                serial_no: Some("SN-DUP".into()),
+                ..Default::default()
+            })?;
+            Ok(())
+        });
+        assert!(outcome.is_err(), "事务内冲突应使整体失败");
+
+        // 原子性：a、b 均不得被软删（不留部分删除）
+        assert_eq!(
+            list_devices(&conn, None, None).unwrap().len(),
+            3,
+            "回滚后 3 台在用设备均应保留"
+        );
+        assert!(
+            list_deleted_devices(&conn, None).unwrap().is_empty(),
+            "回滚后回收站必须为空（不得留下部分删除）"
+        );
+    }
 }

@@ -406,6 +406,26 @@ mod tests {
         assert_eq!(normalize_device_type("whatever"), "other");
     }
 
+    /// 点 6：8 个英文枚举逐一自映射（补齐现有用例未显式覆盖的 loadbalancer）。
+    #[test]
+    fn test_normalize_device_type_all_eight_enums_self_map() {
+        for t in [
+            "server", "switch", "router", "storage", "nas", "security", "loadbalancer", "other",
+        ] {
+            assert_eq!(normalize_device_type(t), t, "英文枚举 {} 应自映射", t);
+        }
+    }
+
+    /// 点 6：制表符/换行/混合分隔符（空白 + `_` + `-`）一律忽略后再匹配。
+    #[test]
+    fn test_normalize_device_type_tabs_and_mixed_separators() {
+        assert_eq!(normalize_device_type("\tSwitch\n"), "switch");
+        assert_eq!(normalize_device_type("load - balancer"), "loadbalancer");
+        assert_eq!(normalize_device_type("NAS_存储"), "nas");
+        // 纯空白/换行亦落到 other（设计如此）
+        assert_eq!(normalize_device_type("\t\n "), "other");
+    }
+
     #[test]
     fn test_new_dtos_serialize_snake_case() {
         // 新 DTO 一律 snake_case（§8-15 N-A），确认无意外驼峰
