@@ -1,20 +1,6 @@
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::Connection;
 use rust_xlsxwriter::*;
 use crate::{db, error::AppError, models::*};
-
-/// 导入进度事件负载（N-06）。
-///
-/// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**。
-/// 定义于 `excel.rs` 内（不放入 `models.rs`），由命令层通过 `AppHandle::emit("import://progress", ...)` 派发。
-#[derive(Clone, serde::Serialize)]
-pub struct ImportProgress {
-    /// 已处理行数
-    pub processed: u32,
-    /// 待处理总行数
-    pub total: u32,
-    /// 阶段：解析 `"parsing"` / 写入 `"importing"` / 结束 `"done"`
-    pub phase: String,
-}
 
 /// 设备类型英文枚举 → 中文标签（N-21）。
 ///
@@ -125,17 +111,6 @@ fn is_known_other(raw: &str) -> bool {
     k == "other" || k == "其他"
 }
 
-/// 按名称查询型号 id 与其既有类型（N-21：同名复用 + 不覆盖既有 type）。
-fn get_model_id_and_type(conn: &Connection, name: &str) -> Result<Option<(i32, String)>, AppError> {
-    conn.query_row(
-        "SELECT id, type FROM device_models WHERE name = ?1",
-        params![name],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )
-    .optional()
-    .map_err(Into::into)
-}
-
 /// 解析/新建型号（N-21）。
 ///
 /// - 名称空 → `Ok(None)`（不创建型号）；
@@ -152,17 +127,17 @@ fn resolve_model(
     if name.is_empty() {
         return Ok(None);
     }
-    if let Some((id, existing_type)) = get_model_id_and_type(conn, name)? {
+    if let Some(existing) = db::device_models::get_device_model_by_name(conn, name)? {
         if let Some(dt) = device_type {
-            if normalize_device_type(&existing_type) != dt {
+            if normalize_device_type(&existing.device_type) != dt {
                 warnings.push(format!(
                     "型号「{}」已存在，类型保持为 {}",
                     name,
-                    device_type_label(normalize_device_type(&existing_type))
+                    device_type_label(normalize_device_type(&existing.device_type))
                 ));
             }
         }
-        Ok(Some(id))
+        Ok(Some(existing.id))
     } else {
         let id = db::device_models::find_or_create_model(conn, name, device_type)?;
         *models_created += 1;
@@ -173,6 +148,9 @@ fn resolve_model(
 /// 关联机房（N-05）：`link_room=true` 且「机房」列非空且机柜存在时，
 /// 幂等 `find_or_create_room` 取 id，并把机柜的 `room_id` 写回该机房
 /// （机房不直接挂 devices，而是经 `devices.rack_id → racks.room_id → rooms` 链路）。
+///
+/// 复用 `db::racks::link_rack_room`：仅当机柜当前无归属（`room_id IS NULL`）时写入，
+/// 不覆盖用户在机柜管理中的手工归属（幂等、非破坏）。
 fn link_rack_room(
     conn: &Connection,
     rack_id: Option<i32>,
@@ -188,16 +166,7 @@ fn link_rack_room(
         return Ok(());
     }
     let room_id = db::rooms::find_or_create_room(conn, room_name)?;
-    if let Some(rack) = db::racks::get_rack(conn, rid)? {
-        if rack.room_id != Some(room_id) {
-            db::racks::update_rack(
-                conn,
-                rid,
-                &RackUpdate { room_id: Patch::Set(room_id), ..Default::default() },
-            )?;
-        }
-    }
-    Ok(())
+    db::racks::link_rack_room(conn, rid, room_id)
 }
 
 /// 构造覆盖更新（`update_mode = "overwrite"`）的三态 Patch：
@@ -468,7 +437,7 @@ pub fn export_single_rack_excel(conn: &Connection, rack_id: i32) -> Result<Vec<u
 ///   其余（含 `"skip"`）→ 跳过并计入 `skipped`。
 /// - `options.link_room`：为 true 且「机房」列非空时，幂等关联机房（写回机柜归属）。
 /// - 重复检测：`find_device_by_serial` / `find_device_by_asset` / `find_device_by_name_in_rack`
-///   （前两者已自动排除软删记录）。
+///   （三者均已排除软删记录）。
 /// - N-21：解析第 16 列（索引 15）「设备类型」，旧文件缺失 → `None`（新建型号按 `'server'` 兜底，100% 向后兼容）。
 /// - 进度：通过 `on_progress(processed, total, phase)` 回调上报（由命令层转 `emit`）。
 /// - `ImportResult.total` = 本次解析到的数据行数（不含表头、不含空名称行）。
@@ -566,7 +535,7 @@ pub fn import_devices_excel(
                 None
             };
 
-            // ===== 重复检测（find_by_serial / find_by_asset 已自动排除软删） =====
+            // ===== 重复检测（均自动排除软删） =====
             let mut existing = None;
             if !serial_no.is_empty() {
                 existing = db::devices::find_device_by_serial(c, &serial_no)?;

@@ -51,16 +51,29 @@ tr:hover { background: #f8f9fa; }
 </div>
 
 <div class="charts">
-  <!-- N-17：机房 U 位使用率（手写内联 SVG 柱状图，零图表依赖） -->
+  <!-- N-17：机房 U 位使用率（手写内联 SVG 柱状图，零图表依赖 / 零 CDN） -->
   <div class="chart-card">
     <h2>🏢 机房 U 位使用率</h2>
     {% if has_rooms %}
-    <svg width="100%" viewBox="0 0 640 {{ bar_chart_height }}" preserveAspectRatio="xMinYMin meet" role="img" aria-label="机房 U 位使用率柱状图">
-      {% for r in room_utils %}
-      <text x="0" y="{{ r.text_y }}" font-size="12" fill="#444">{{ r.name }}</text>
-      <rect x="150" y="{{ r.y }}" width="320" height="16" rx="3" fill="#eef2f7"/>
-      <rect x="150" y="{{ r.y }}" width="{{ r.bar_px }}" height="16" rx="3" fill="#2f80ed"/>
-      <text x="480" y="{{ r.text_y }}" font-size="12" fill="#666">{{ r.used_u }}/{{ r.total_u }}U（{{ r.pct }}%）</text>
+    <svg width="100%" viewBox="0 0 680 280" preserveAspectRatio="xMinYMin meet" role="img" aria-label="机房 U 位使用率柱状图">
+      <!-- 网格线与刻度：几何常量与 report.rs 保持一致（X0=64 / X1=640 / Y_BOTTOM=240 / PLOT_H=200） -->
+      <line x1="64" y1="40" x2="640" y2="40" stroke="#eef2f7" stroke-width="1"/>
+      <line x1="64" y1="90" x2="640" y2="90" stroke="#eef2f7" stroke-width="1"/>
+      <line x1="64" y1="140" x2="640" y2="140" stroke="#eef2f7" stroke-width="1"/>
+      <line x1="64" y1="190" x2="640" y2="190" stroke="#eef2f7" stroke-width="1"/>
+      <line x1="64" y1="240" x2="640" y2="240" stroke="#d9e1ea" stroke-width="1"/>
+      <line x1="64" y1="40" x2="64" y2="240" stroke="#d9e1ea" stroke-width="1"/>
+      <text x="58" y="44" font-size="11" fill="#999" text-anchor="end">100%</text>
+      <text x="58" y="94" font-size="11" fill="#999" text-anchor="end">75%</text>
+      <text x="58" y="144" font-size="11" fill="#999" text-anchor="end">50%</text>
+      <text x="58" y="194" font-size="11" fill="#999" text-anchor="end">25%</text>
+      <text x="58" y="244" font-size="11" fill="#999" text-anchor="end">0</text>
+      {% for r in room_bars %}
+      <rect x="{{ r.bar_x }}" y="{{ r.bar_y }}" width="{{ r.bar_w }}" height="{{ r.bar_h }}" rx="2" fill="{{ r.color }}">
+        <title>{{ r.label }}：{{ r.used_u }}/{{ r.total_u }}U（{{ r.percent_text }}）</title>
+      </rect>
+      <text x="{{ r.cx }}" y="{{ r.percent_y }}" font-size="11" fill="#555" text-anchor="middle">{{ r.percent_text }}</text>
+      <text x="{{ r.cx }}" y="258" font-size="11" fill="#666" text-anchor="middle">{{ r.label }}</text>
       {% endfor %}
     </svg>
     {% else %}
@@ -68,19 +81,20 @@ tr:hover { background: #f8f9fa; }
     {% endif %}
   </div>
 
-  <!-- N-17：设备类型分布（手写内联 SVG 堆叠条） -->
+  <!-- N-17：设备类型分布（手写内联 SVG 饼图，零图表依赖 / 零 CDN） -->
   <div class="chart-card">
     <h2>🧩 设备类型分布（共 {{ type_total }} 台）</h2>
     {% if has_types %}
-    <svg width="100%" viewBox="0 0 480 34" preserveAspectRatio="xMinYMin meet" role="img" aria-label="设备类型分布堆叠条">
-      <rect x="0" y="0" width="480" height="34" rx="4" fill="#eef2f7"/>
+    <svg width="100%" viewBox="0 0 300 300" preserveAspectRatio="xMinYMin meet" role="img" aria-label="设备类型分布饼图">
       {% for s in type_slices %}
-      <rect x="{{ s.x }}" y="0" width="{{ s.width }}" height="34" fill="{{ s.color }}"><title>{{ s.label }}：{{ s.count }} 台（{{ s.pct }}%）</title></rect>
+      <path d="{{ s.path }}" fill="{{ s.color }}" stroke="#ffffff" stroke-width="1">
+        <title>{{ s.label }}：{{ s.count }} 台（{{ s.percent_text }}）</title>
+      </path>
       {% endfor %}
     </svg>
     <ul class="legend">
-      {% for s in type_slices %}
-      <li><span class="dot" style="background:{{ s.color }}"></span>{{ s.label }} {{ s.count }}（{{ s.pct }}%）</li>
+      {% for l in type_legend %}
+      <li><span class="dot" style="background:{{ l.color }}"></span>{{ l.label }} {{ l.count }}（{{ l.percent_text }}）</li>
       {% endfor %}
     </ul>
     {% else %}

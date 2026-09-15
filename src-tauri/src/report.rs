@@ -1,22 +1,30 @@
 use askama::Template;
 use rusqlite::Connection;
+use std::f64::consts::PI;
 use crate::{db, error::AppError};
+use crate::excel::device_type_label;
+use crate::models::normalize_device_type;
 
-/// 设备类型展示顺序 / 标签 / 配色（与前端 `constants/labels.ts` 的 `DEVICE_TYPES` 同序，§8-14）。
+/// 设备类型展示顺序（与前端 `constants/labels.ts` 的 `DEVICE_TYPES` 同序，§8-14）。
 const TYPE_ORDER: [&str; 8] = [
     "server", "switch", "router", "storage", "nas", "security", "loadbalancer", "other",
 ];
-const TYPE_LABELS: [&str; 8] = [
-    "服务器", "交换机", "路由器", "存储阵列", "NAS 存储", "网安设备", "负载均衡", "其他",
-];
+/// 类型饼图配色（8 类固定色，与图例一致）。
 const TYPE_COLORS: [&str; 8] = [
-    "#2f80ed", "#00b8d9", "#f2a900", "#9b51e0", "#27ae60", "#e0492a", "#e0489a", "#8c8c8c",
+    "#1890ff", "#52c41a", "#faad14", "#722ed1", "#13c2c2", "#eb2f96", "#fa541c", "#8c8c8c",
 ];
 
-/// 柱状图基准宽度（机房使用率）
-const BAR_MAX_PX: i32 = 320;
-/// 堆叠条基准宽度（类型分布）
-const STACK_MAX_PX: i32 = 480;
+// ===== 柱状图几何（与 templates/report.html 的网格线硬编码保持一致）=====
+/// X 轴起点
+const X0: f64 = 64.0;
+/// X 轴终点
+const X1: f64 = 640.0;
+/// Y 轴底部（0%）
+const Y_BOTTOM: f64 = 240.0;
+/// 绘图区高度（100% 对应高度）
+const PLOT_H: f64 = 200.0;
+/// 柱子最大宽度
+const BAR_MAX_W: f64 = 70.0;
 
 #[derive(Template)]
 #[template(path = "report.html")]
@@ -27,13 +35,13 @@ struct ReportTemplate {
     online_count: usize,
     offline_count: usize,
     unconfigured_count: usize,
-    // ===== N-17 图表（手写内联 SVG，零图表依赖）=====
-    room_utils: Vec<RoomUtil>,
-    type_slices: Vec<TypeSlice>,
-    type_total: usize,
+    // ===== N-17 图表（Rust 侧手写内联 SVG，零图表依赖 / 零 CDN）=====
+    room_bars: Vec<RoomBar>,
     has_rooms: bool,
+    type_slices: Vec<TypeSlice>,
+    type_legend: Vec<LegendItem>,
+    type_total: usize,
     has_types: bool,
-    bar_chart_height: i32,
 }
 
 struct ReportDevice {
@@ -48,25 +56,58 @@ struct ReportDevice {
     owner: String,
 }
 
-/// 机房 U 位使用率（柱状图一行）
-struct RoomUtil {
-    name: String,
+/// 机房利用率柱状图的一根柱子。
+struct RoomBar {
+    label: String,
     used_u: i32,
     total_u: i32,
-    pct: i32,
-    bar_px: i32,
-    y: i32,
-    text_y: i32,
+    percent_text: String,
+    cx: f64,
+    bar_x: f64,
+    bar_y: f64,
+    bar_w: f64,
+    bar_h: f64,
+    percent_y: f64,
+    color: String,
 }
 
-/// 设备类型分布（堆叠条一段）
+/// 设备类型分布饼图的一段。
 struct TypeSlice {
     label: String,
     color: String,
     count: usize,
-    pct: i32,
-    x: i32,
-    width: i32,
+    percent_text: String,
+    path: String,
+}
+
+/// 饼图图例项（含 0 值类，保证图例稳定可用）。
+struct LegendItem {
+    label: String,
+    color: String,
+    count: usize,
+    percent_text: String,
+}
+
+/// 机房使用率配色：>85% 红、≥60% 橙、其余绿。
+fn util_color(pct: f64) -> &'static str {
+    if pct > 85.0 {
+        "#ff4d4f"
+    } else if pct >= 60.0 {
+        "#faad14"
+    } else {
+        "#52c41a"
+    }
+}
+
+/// 截断过长标签（按字符数，超出尾部加省略号），避免柱状图 X 轴标签互相重叠。
+fn truncate_label(s: &str, max_chars: usize) -> String {
+    let mut it = s.chars();
+    let head: String = it.by_ref().take(max_chars).collect();
+    if it.next().is_some() {
+        format!("{}…", head)
+    } else {
+        head
+    }
 }
 
 pub fn render_report(conn: &Connection) -> Result<String, AppError> {
@@ -92,10 +133,10 @@ pub fn render_report(conn: &Connection) -> Result<String, AppError> {
             "offline" => offline += 1,
             _ => unconfigured += 1,
         }
-        // 类型分布累计（无型号 → other）
+        // 类型分布累计（无型号 / 未知类型 → other 兜底）
         let ty = d.device_model_id
             .and_then(|id| model_types.get(&id))
-            .map(|s| s.as_str())
+            .map(|s| normalize_device_type(s))
             .unwrap_or("other");
         let ti = TYPE_ORDER.iter().position(|t| *t == ty).unwrap_or(TYPE_ORDER.len() - 1);
         type_counts[ti] += 1;
@@ -131,73 +172,123 @@ pub fn render_report(conn: &Connection) -> Result<String, AppError> {
         }
     }).collect();
 
-    // ===== 机房 U 位使用率（柱状）=====
-    // 每台设备的有效占用高度（height_u ≥ 1）
-    let mut room_utils: Vec<RoomUtil> = Vec::new();
-    for (idx, room) in rooms.iter().enumerate() {
-        let rack_ids: std::collections::HashSet<i32> = racks.iter()
-            .filter(|r| r.room_id == Some(room.id))
-            .map(|r| r.id)
-            .collect();
-        let total_u: i32 = racks.iter()
-            .filter(|r| r.room_id == Some(room.id))
-            .map(|r| r.height_u.max(0))
-            .sum();
-        let used_u: i32 = if rack_ids.is_empty() {
-            0
-        } else {
-            devices.iter()
-                .filter(|d| d.rack_id.map(|rid| rack_ids.contains(&rid)).unwrap_or(false))
-                .map(|d| d.height_u.max(0))
-                .sum()
-        };
-        let pct = if total_u > 0 {
-            ((used_u * 100) / total_u).clamp(0, 100)
-        } else {
-            0
-        };
-        let bar_px = BAR_MAX_PX * pct / 100;
-        let y = idx as i32 * 34 + 12;
-        room_utils.push(RoomUtil {
-            name: room.name.clone(),
-            used_u,
-            total_u,
-            pct,
-            bar_px,
-            y,
-            text_y: y + 12,
-        });
+    // ===== ① 机房利用率（柱状图）=====
+    // 每机柜已用 U 位（按设备 U 位区间求和；软删设备已被 list_devices 排除）
+    let mut used_by_rack: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
+    for d in &devices {
+        if let (Some(rid), Some(s), Some(e)) = (d.rack_id, d.start_u, d.end_u) {
+            if e >= s {
+                *used_by_rack.entry(rid).or_insert(0) += e - s + 1;
+            }
+        }
     }
-    let bar_chart_height = room_utils.len() as i32 * 34 + 16;
 
-    // ===== 设备类型分布（堆叠条）=====
+    // 每机房：总 U 位 = 该机房所有机柜高度之和；已用 U 位 = 这些机柜内设备占用之和
+    let mut room_rows: Vec<(String, i32, i32)> = Vec::new();
+    for room in &rooms {
+        let room_racks: Vec<&crate::models::Rack> =
+            racks.iter().filter(|r| r.room_id == Some(room.id)).collect();
+        let total_u: i32 = room_racks.iter().map(|r| r.height_u.max(0)).sum();
+        if total_u <= 0 {
+            continue; // 无机柜的机房不参与利用率统计（避免除零）
+        }
+        let used_u: i32 = room_racks
+            .iter()
+            .map(|r| used_by_rack.get(&r.id).copied().unwrap_or(0))
+            .sum();
+        room_rows.push((room.name.clone(), used_u, total_u));
+    }
+
+    let n = room_rows.len();
+    let slot = if n > 0 { (X1 - X0) / n as f64 } else { 0.0 };
+    let bar_w = (slot * 0.6).clamp(10.0, BAR_MAX_W);
+    let room_bars: Vec<RoomBar> = room_rows
+        .iter()
+        .enumerate()
+        .map(|(i, (name, used_u, total_u))| {
+            let pct = if *total_u > 0 {
+                (*used_u as f64 / *total_u as f64) * 100.0
+            } else {
+                0.0
+            };
+            let bar_h = PLOT_H * (pct / 100.0);
+            let cx = X0 + slot * i as f64 + slot / 2.0;
+            RoomBar {
+                label: truncate_label(name, 8),
+                used_u: *used_u,
+                total_u: *total_u,
+                percent_text: format!("{:.0}%", pct),
+                cx,
+                bar_x: cx - bar_w / 2.0,
+                bar_y: Y_BOTTOM - bar_h,
+                bar_w,
+                bar_h,
+                percent_y: (Y_BOTTOM - bar_h) - 5.0,
+                color: util_color(pct).to_string(),
+            }
+        })
+        .collect();
+
+    // ===== ② 设备类型分布（饼图）=====
     let type_total: usize = type_counts.iter().sum();
     let mut type_slices: Vec<TypeSlice> = Vec::new();
-    let mut cursor_x = 0i32;
+    let mut type_legend: Vec<LegendItem> = Vec::new();
+
     for i in 0..8 {
         let count = type_counts[i];
-        if count == 0 {
-            continue;
-        }
-        let width = if type_total > 0 {
-            (STACK_MAX_PX as usize * count / type_total) as i32
-        } else {
-            0
-        };
         let pct = if type_total > 0 {
-            (count * 100 / type_total) as i32
+            (count as f64 / type_total as f64) * 100.0
         } else {
-            0
+            0.0
         };
-        type_slices.push(TypeSlice {
-            label: TYPE_LABELS[i].to_string(),
+        type_legend.push(LegendItem {
+            label: device_type_label(TYPE_ORDER[i]).to_string(),
             color: TYPE_COLORS[i].to_string(),
             count,
-            pct,
-            x: cursor_x,
-            width,
+            percent_text: format!("{:.1}%", pct),
         });
-        cursor_x += width;
+    }
+
+    if type_total > 0 {
+        let cx = 150.0f64;
+        let cy = 150.0f64;
+        let r = 120.0f64;
+        let nonzero = type_counts.iter().filter(|c| **c > 0).count();
+        let single = nonzero == 1;
+        let mut start = -PI / 2.0; // 从正上方开始
+        for i in 0..8 {
+            let count = type_counts[i];
+            if count == 0 {
+                continue;
+            }
+            let frac = count as f64 / type_total as f64;
+            let end = start + frac * 2.0 * PI;
+            let path = if single {
+                // 整圆：两段半圆弧
+                format!(
+                    "M {cx} {cy} L {cx} {top} A {r} {r} 0 1 1 {cx} {bot} A {r} {r} 0 1 1 {cx} {top} Z",
+                    top = cy - r,
+                    bot = cy + r
+                )
+            } else {
+                let x0 = cx + r * start.cos();
+                let y0 = cy + r * start.sin();
+                let x1 = cx + r * end.cos();
+                let y1 = cy + r * end.sin();
+                let large = if (end - start) > PI { 1 } else { 0 };
+                format!(
+                    "M {cx:.2} {cy:.2} L {x0:.2} {y0:.2} A {r:.2} {r:.2} 0 {large} 1 {x1:.2} {y1:.2} Z"
+                )
+            };
+            type_slices.push(TypeSlice {
+                label: device_type_label(TYPE_ORDER[i]).to_string(),
+                color: TYPE_COLORS[i].to_string(),
+                count,
+                percent_text: format!("{:.1}%", frac * 100.0),
+                path,
+            });
+            start = end;
+        }
     }
 
     let template = ReportTemplate {
@@ -210,11 +301,11 @@ pub fn render_report(conn: &Connection) -> Result<String, AppError> {
         online_count: online,
         offline_count: offline,
         unconfigured_count: unconfigured,
-        has_rooms: !room_utils.is_empty(),
+        has_rooms: !room_bars.is_empty(),
+        room_bars,
         has_types: type_total > 0,
-        bar_chart_height,
-        room_utils,
         type_slices,
+        type_legend,
         type_total,
     };
 
@@ -270,5 +361,16 @@ mod tests {
         // 使用率 4/10 = 40%
         assert!(html.contains("40%"), "使用率应为 40%");
         assert!(html.contains("交换机"), "类型分布应含交换机");
+        // 内联 SVG：不得引入任何外部资源
+        assert!(html.contains("<svg"), "报表应含内联 SVG");
+        assert!(!html.contains("<script"), "报表不得含脚本");
+    }
+
+    #[test]
+    fn test_report_pie_no_data_is_graceful() {
+        // 空库：不 panic、饼图区域显示占位文案
+        let conn = setup_db();
+        let html = render_report(&conn).unwrap();
+        assert!(html.contains("暂无设备数据"));
     }
 }

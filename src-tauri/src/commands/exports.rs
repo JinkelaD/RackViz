@@ -1,7 +1,7 @@
-use tauri::State;
+use tauri::{Emitter, State};
 use crate::state::DbState;
 use crate::error::AppError;
-use crate::models::{ImportOptions, ImportResult};
+use crate::models::{ImportOptions, ImportProgress, ImportResult};
 use tauri_plugin_dialog::DialogExt;
 use std::path::PathBuf;
 
@@ -156,7 +156,14 @@ pub async fn import_excel_from_path(
     let pool = state.pool.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<ImportResult, AppError> {
         let conn = pool.get()?;
-        crate::excel::import_devices_excel(&conn, &app, &path, &options)
+        // 进度事件：在 blocking 任务内经 AppHandle 派发 `import://progress`（§8-8）
+        let progress = move |processed: u32, total: u32, phase: &str| {
+            let _ = app.emit(
+                "import://progress",
+                ImportProgress { processed, total, phase: phase.to_string() },
+            );
+        };
+        crate::excel::import_devices_excel(&conn, &path, &options, &progress)
     })
     .await
     .map_err(|e| AppError::io(&format!("导入任务异常: {}", e)))??;
