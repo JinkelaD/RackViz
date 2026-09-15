@@ -240,7 +240,7 @@ pub fn import_devices_excel(conn: &Connection, file_path: &str) -> Result<Import
 
             let model_name = cell_to_string(row.get(1).unwrap_or(&calamine::Data::Empty)).trim().to_string();
             let model_id = if !model_name.is_empty() {
-                Some(db::device_models::find_or_create_model(c, &model_name)?)
+                Some(db::device_models::find_or_create_model(c, &model_name, None)?)
             } else {
                 None
             };
@@ -327,5 +327,5 @@ pub fn import_devices_excel(conn: &Connection, file_path: &str) -> Result<Import
         Ok(())
     })?;
 
-    Ok(ImportResult { imported, skipped, errors })
+    Ok(ImportResult { imported, skipped, errors, ..Default::default() })
 }

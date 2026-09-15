@@ -2,7 +2,7 @@ use rusqlite::{Connection, params};
 use rusqlite::types::ToSql;
 use crate::models::*;
 use crate::error::AppError;
-use crate::db::patch_assign;
+use crate::db::{patch_assign, now_iso};
 
 pub fn list_racks(conn: &Connection) -> Result<Vec<Rack>, AppError> {
     let mut stmt = conn.prepare(
@@ -47,8 +47,10 @@ pub fn get_rack(conn: &Connection, id: i32) -> Result<Option<Rack>, AppError> {
 }
 
 pub fn insert_rack(conn: &Connection, data: &RackCreate) -> Result<Rack, AppError> {
+    let now = now_iso();
     conn.execute(
-        "INSERT INTO racks (name, height_u, row, col, view, sort_order, room_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO racks (name, height_u, row, col, view, sort_order, room_id, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             data.name,
             data.height_u.unwrap_or(42),
@@ -57,6 +59,8 @@ pub fn insert_rack(conn: &Connection, data: &RackCreate) -> Result<Rack, AppErro
             data.view.as_deref().unwrap_or("front"),
             data.sort_order.unwrap_or(0),
             data.room_id,
+            now.as_str(),
+            now.as_str(),
         ],
     )?;
     let id = conn.last_insert_rowid() as i32;
@@ -83,6 +87,10 @@ pub fn update_rack(conn: &Connection, id: i32, data: &RackUpdate) -> Result<Opti
     if assignments.is_empty() {
         return Ok(existing);
     }
+
+    // 时间戳单一维护方（§8-1）：刷新 updated_at
+    assignments.push(format!("updated_at = ?{}", params.len() + 1));
+    params.push(Box::new(now_iso()));
 
     let sql = format!(
         "UPDATE racks SET {} WHERE id = ?{}",
@@ -126,8 +134,8 @@ pub fn find_or_create_rack(conn: &Connection, name: &str) -> Result<i32, AppErro
         return Ok(id);
     }
     match conn.execute(
-        "INSERT INTO racks (name, height_u) VALUES (?1, 42)",
-        params![name],
+        "INSERT INTO racks (name, height_u, created_at, updated_at) VALUES (?1, 42, ?2, ?2)",
+        params![name, now_iso()],
     ) {
         Ok(_) => Ok(conn.last_insert_rowid() as i32),
         Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => {

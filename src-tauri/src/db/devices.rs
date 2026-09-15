@@ -1,10 +1,10 @@
 use rusqlite::{Connection, params};
 use rusqlite::types::ToSql;
 use rusqlite::OptionalExtension;
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use crate::models::*;
 use crate::error::AppError;
-use crate::db::patch_assign;
+use crate::db::{patch_assign, NOT_DELETED, now_iso};
 
 /// 转义 LIKE 模式中的通配符，防止用户输入 `%`/`_`/`\` 干扰匹配。
 /// SQL 侧必须配套 `ESCAPE '\'`。
@@ -73,8 +73,18 @@ fn resolve_device_height(
     Ok(1)
 }
 
+/// 回收站可恢复窗口（天）：超过该天数的软删记录拒绝恢复（§9 Q6，固定常量，不物理清理）。
+const RESTORE_WINDOW_DAYS: i64 = 30;
+
+/// `query_devices` 分页默认/上限（防止前端传超大 limit 拖垮 UI）。
+const QUERY_DEFAULT_LIMIT: i64 = 100;
+const QUERY_MAX_LIMIT: i64 = 1000;
+
+/// 全量列出设备（RackView / 导出 / 报表用）。
+///
+/// **保留全量语义**：恒追加 `deleted_at IS NULL`（§10.2 第 8 项裁决，不暴露 `include_deleted`）。
 pub fn list_devices(conn: &Connection, rack_id: Option<i32>, search: Option<String>) -> Result<Vec<Device>, AppError> {
-    let mut conditions: Vec<String> = Vec::new();
+    let mut conditions: Vec<String> = vec![NOT_DELETED.to_string()];
     let mut param_values: Vec<String> = Vec::new();
 
     if let Some(rid) = rack_id {
@@ -89,15 +99,11 @@ pub fn list_devices(conn: &Connection, rack_id: Option<i32>, search: Option<Stri
         }
     }
 
-    let sql = if conditions.is_empty() {
-        format!("{} ORDER BY name", DEVICE_SELECT)
-    } else {
-        format!(
-            "{} WHERE {} ORDER BY name",
-            DEVICE_SELECT,
-            conditions.join(" AND ")
-        )
-    };
+    let sql = format!(
+        "{} WHERE {} ORDER BY name",
+        DEVICE_SELECT,
+        conditions.join(" AND ")
+    );
 
     let mut stmt = conn.prepare(&sql)?;
     let params_refs: Vec<&dyn rusqlite::types::ToSql> = param_values
@@ -106,6 +112,119 @@ pub fn list_devices(conn: &Connection, rack_id: Option<i32>, search: Option<Stri
         .collect();
 
     let rows = stmt.query_map(params_refs.as_slice(), row_to_device)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.into())
+}
+
+/// 服务端分页 + 多字段搜索 + 白名单排序（N-01/N-02）。
+///
+/// 返回 `(items, total)`：`total` 为**同一 WHERE 条件下**的 `COUNT(*)`。
+///
+/// - 过滤：默认 `deleted_at IS NULL`；`include_deleted=true` 时才放行；
+///   `rack_id = ?`；`room_id` 经 `rack_id IN (SELECT id FROM racks WHERE room_id = ?)`。
+/// - 搜索：`(name LIKE ? OR ip_addresses LIKE ? OR serial_no LIKE ? OR asset_no LIKE ?)`，
+///   复用 `escape_like` 并带 `ESCAPE '\'`。
+/// - 排序：**白名单映射**字段 → 列名；`sort_order` 仅 `asc|desc`；**绝不允许前端字符串裸拼接**。
+/// - 分页：`LIMIT ? OFFSET ?`。
+pub fn query_devices(conn: &Connection, q: &DeviceQuery) -> Result<(Vec<Device>, i64), AppError> {
+    let include_deleted = q.include_deleted.unwrap_or(false);
+
+    let mut where_parts: Vec<String> = Vec::new();
+    let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+
+    // 1) 软删除过滤（默认排除）
+    if !include_deleted {
+        where_parts.push(NOT_DELETED.to_string());
+    }
+    // 2) 机柜过滤
+    if let Some(rid) = q.rack_id {
+        params.push(Box::new(rid));
+        where_parts.push(format!("rack_id = ?{}", params.len()));
+    }
+    // 3) 机房过滤（经机柜表）
+    if let Some(room_id) = q.room_id {
+        params.push(Box::new(room_id));
+        where_parts.push(format!(
+            "rack_id IN (SELECT id FROM racks WHERE room_id = ?{})",
+            params.len()
+        ));
+    }
+    // 4) 多字段搜索（四字段同参）
+    if let Some(ref s) = q.search {
+        let s = s.trim();
+        if !s.is_empty() {
+            params.push(Box::new(format!("%{}%", escape_like(s))));
+            let idx = params.len();
+            where_parts.push(format!(
+                "(name LIKE ?{idx} ESCAPE '\\' \
+                 OR ip_addresses LIKE ?{idx} ESCAPE '\\' \
+                 OR serial_no LIKE ?{idx} ESCAPE '\\' \
+                 OR asset_no LIKE ?{idx} ESCAPE '\\')"
+            ));
+        }
+    }
+
+    let where_clause = if where_parts.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", where_parts.join(" AND "))
+    };
+
+    // total：同 WHERE 的 COUNT(*)
+    let count_sql = format!("SELECT COUNT(*) FROM devices{}", where_clause);
+    let count_refs: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let total: i64 = conn.query_row(&count_sql, count_refs.as_slice(), |r| r.get(0))?;
+
+    // 排序白名单（仅映射，不做任何未校验拼接）
+    let order_col = match q.sort_field.as_deref() {
+        Some("ip_addresses") => "ip_addresses",
+        Some("serial_no") => "serial_no",
+        Some("asset_no") => "asset_no",
+        Some("status") => "status",
+        Some("power_watt") => "power_watt",
+        Some("created_at") => "created_at",
+        Some("updated_at") => "updated_at",
+        Some("rack_id") => "rack_id",
+        Some("name") => "name",
+        _ => "name",
+    };
+    let order_dir = match q.sort_order.as_deref() {
+        Some("desc") => "DESC",
+        _ => "ASC",
+    };
+
+    // 分页参数（夹取到安全范围）
+    let limit = q.limit.unwrap_or(QUERY_DEFAULT_LIMIT).clamp(1, QUERY_MAX_LIMIT);
+    let offset = q.offset.unwrap_or(0).max(0);
+
+    let list_sql = format!(
+        "{}{} ORDER BY {} {} LIMIT ?{} OFFSET ?{}",
+        DEVICE_SELECT,
+        where_clause,
+        order_col,
+        order_dir,
+        params.len() + 1,
+        params.len() + 2
+    );
+
+    let mut stmt = conn.prepare(&list_sql)?;
+    let mut list_refs: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    list_refs.push(&limit);
+    list_refs.push(&offset);
+    let rows = stmt.query_map(list_refs.as_slice(), row_to_device)?;
+    let items = rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)?;
+
+    Ok((items, total))
+}
+
+/// 回收站列表：仅软删除记录，按 `deleted_at DESC`（N-09）。
+pub fn list_deleted_devices(conn: &Connection, limit: Option<i64>) -> Result<Vec<Device>, AppError> {
+    let limit = limit.unwrap_or(500).clamp(1, 5000);
+    let sql = format!(
+        "{} WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT ?1",
+        DEVICE_SELECT
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![limit], row_to_device)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.into())
 }
 
@@ -129,12 +248,15 @@ pub fn insert_device(conn: &Connection, data: &DeviceCreate) -> Result<Device, A
     let purchase_date = parse_optional_date(&data.purchase_date);
     let warranty_expire = parse_optional_date(&data.warranty_expire);
     let height_u = resolve_device_height(conn, data.height_u, data.start_u, data.end_u, data.device_model_id)?;
+    // 时间戳单一维护方（§8-1）：insert 时 created_at = updated_at = now
+    let now = now_iso();
 
     conn.execute(
         "INSERT INTO devices (name, device_model_id, rack_id, start_u, end_u, \
          ip_addresses, serial_no, asset_no, department, owner, function, \
-         purchase_date, warranty_expire, status, power_watt, height_u) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+         purchase_date, warranty_expire, status, power_watt, height_u, \
+         created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             data.name,
             data.device_model_id,
@@ -152,6 +274,8 @@ pub fn insert_device(conn: &Connection, data: &DeviceCreate) -> Result<Device, A
             data.status.as_deref().unwrap_or("unconfigured"),
             data.power_watt.unwrap_or(0),
             height_u,
+            now.as_str(),
+            now.as_str(),
         ],
     )?;
     let id = conn.last_insert_rowid() as i32;
@@ -226,6 +350,10 @@ pub fn update_device(conn: &Connection, id: i32, data: &DeviceUpdate) -> Result<
         return Ok(Some(cur));
     }
 
+    // 时间戳单一维护方（§8-1）：任何更新刷新 updated_at = now
+    assignments.push(format!("updated_at = ?{}", params.len() + 1));
+    params.push(Box::new(now_iso()));
+
     let sql = format!(
         "UPDATE devices SET {} WHERE id = ?{}",
         assignments.join(", "),
@@ -266,13 +394,19 @@ fn push_date_assignment(
 }
 
 pub fn find_device_by_serial(conn: &Connection, serial_no: &str) -> Result<Option<Device>, AppError> {
-    let mut stmt = conn.prepare(&format!("{} WHERE serial_no = ?1 AND serial_no != ''", DEVICE_SELECT))?;
+    let mut stmt = conn.prepare(&format!(
+        "{} WHERE serial_no = ?1 AND serial_no != '' AND {}",
+        DEVICE_SELECT, NOT_DELETED
+    ))?;
     let mut rows = stmt.query_map(params![serial_no], row_to_device)?;
     Ok(rows.next().transpose()?)
 }
 
 pub fn find_device_by_asset(conn: &Connection, asset_no: &str) -> Result<Option<Device>, AppError> {
-    let mut stmt = conn.prepare(&format!("{} WHERE asset_no = ?1 AND asset_no != ''", DEVICE_SELECT))?;
+    let mut stmt = conn.prepare(&format!(
+        "{} WHERE asset_no = ?1 AND asset_no != '' AND {}",
+        DEVICE_SELECT, NOT_DELETED
+    ))?;
     let mut rows = stmt.query_map(params![asset_no], row_to_device)?;
     Ok(rows.next().transpose()?)
 }
@@ -296,9 +430,126 @@ pub fn find_device_by_name_in_rack(conn: &Connection, name: &str, rack_id: Optio
     }
 }
 
-pub fn delete_device(conn: &Connection, id: i32) -> Result<bool, AppError> {
-    let affected = conn.execute("DELETE FROM devices WHERE id = ?1", params![id])?;
+/// 单条软删除（N-09）。`delete_device` 的语义实现；批量删除亦复用它（§8-13）。
+///
+/// `UPDATE devices SET deleted_at = now, updated_at = now WHERE id = ? AND deleted_at IS NULL`，
+/// 返回受影响行数是否 > 0。
+pub fn soft_delete_device(conn: &Connection, id: i32) -> Result<bool, AppError> {
+    let now = now_iso();
+    let affected = conn.execute(
+        "UPDATE devices SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
+        params![now.as_str(), now.as_str(), id],
+    )?;
     Ok(affected > 0)
+}
+
+/// 删除设备（对外语义）：按 §10.1 改为**软删除**，内部转调 `soft_delete_device`。
+pub fn delete_device(conn: &Connection, id: i32) -> Result<bool, AppError> {
+    soft_delete_device(conn, id)
+}
+
+/// 批量软删除（N-20）：在**同一事务**内循环复用单条软删（§8-13，禁止 `DELETE ... IN`）。
+///
+/// 返回 `(deleted 成功数, not_found 不存在 / 已被软删的 id 列表)`。
+/// 事务的 `BEGIN/COMMIT/ROLLBACK` 由调用方（命令层）通过 `with_transaction` 包裹。
+pub fn delete_devices_batch(conn: &Connection, ids: &[i32]) -> Result<(u32, Vec<i32>), AppError> {
+    let mut deleted: u32 = 0;
+    let mut not_found: Vec<i32> = Vec::new();
+    for &id in ids {
+        if soft_delete_device(conn, id)? {
+            deleted += 1;
+        } else {
+            not_found.push(id);
+        }
+    }
+    Ok((deleted, not_found))
+}
+
+/// 解析 ISO8601 UTC 时间戳（`%Y-%m-%dT%H:%M:%SZ`），失败返回 None。
+fn parse_iso_utc(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .ok()
+}
+
+/// 冲突预检：在**其它 active 设备**中查找占用同一 `serial_no` 的记录（排除自身）。
+fn find_active_by_serial_excluding(
+    conn: &Connection,
+    serial_no: &str,
+    exclude_id: i32,
+) -> Result<Option<Device>, AppError> {
+    let mut stmt = conn.prepare(&format!(
+        "{} WHERE serial_no = ?1 AND serial_no != '' AND {} AND id != ?2",
+        DEVICE_SELECT, NOT_DELETED
+    ))?;
+    let mut rows = stmt.query_map(params![serial_no, exclude_id], row_to_device)?;
+    Ok(rows.next().transpose()?)
+}
+
+/// 冲突预检：在**其它 active 设备**中查找占用同一 `asset_no` 的记录（排除自身）。
+fn find_active_by_asset_excluding(
+    conn: &Connection,
+    asset_no: &str,
+    exclude_id: i32,
+) -> Result<Option<Device>, AppError> {
+    let mut stmt = conn.prepare(&format!(
+        "{} WHERE asset_no = ?1 AND asset_no != '' AND {} AND id != ?2",
+        DEVICE_SELECT, NOT_DELETED
+    ))?;
+    let mut rows = stmt.query_map(params![asset_no, exclude_id], row_to_device)?;
+    Ok(rows.next().transpose()?)
+}
+
+/// 恢复软删除设备（N-09）：
+/// ① 读取该行 `deleted_at`，**超 30 天拒绝恢复**；
+/// ② **冲突预检**——`serial_no` / `asset_no` 是否被其它 active 设备占用，命中则
+///    `AppError::conflict("恢复失败：序列号 SN-x 已被设备「Y」占用，请先处理该设备")`，**不自动改名**；
+/// ③ 通过则 `UPDATE devices SET deleted_at = NULL, updated_at = now WHERE id = ?` 并返回该 `Device`。
+pub fn restore_device(conn: &Connection, id: i32) -> Result<Device, AppError> {
+    let dev = get_device(conn, id)?.ok_or_else(|| AppError::not_found("设备"))?;
+
+    // ① 必须处于软删状态
+    let deleted_at = dev
+        .deleted_at
+        .clone()
+        .ok_or_else(|| AppError::validation("该设备未被删除，无需恢复"))?;
+
+    // ① 超 30 天拒绝恢复
+    if let Some(dt) = parse_iso_utc(&deleted_at) {
+        let age_days = (Utc::now() - dt).num_days();
+        if age_days > RESTORE_WINDOW_DAYS {
+            return Err(AppError::validation(&format!(
+                "恢复失败：设备删除已超过 {} 天，无法恢复",
+                RESTORE_WINDOW_DAYS
+            )));
+        }
+    }
+
+    // ② 冲突预检（序列号）
+    if !dev.serial_no.trim().is_empty() {
+        if let Some(other) = find_active_by_serial_excluding(conn, &dev.serial_no, dev.id)? {
+            return Err(AppError::conflict(&format!(
+                "恢复失败：序列号 {} 已被设备「{}」占用，请先处理该设备",
+                dev.serial_no, other.name
+            )));
+        }
+    }
+    // ② 冲突预检（资产编号）
+    if !dev.asset_no.trim().is_empty() {
+        if let Some(other) = find_active_by_asset_excluding(conn, &dev.asset_no, dev.id)? {
+            return Err(AppError::conflict(&format!(
+                "恢复失败：资产编号 {} 已被设备「{}」占用，请先处理该设备",
+                dev.asset_no, other.name
+            )));
+        }
+    }
+
+    // ③ 恢复
+    conn.execute(
+        "UPDATE devices SET deleted_at = NULL, updated_at = ?1 WHERE id = ?2",
+        params![now_iso(), id],
+    )?;
+    get_device(conn, id)?.ok_or_else(|| AppError::not_found("设备"))
 }
 
 #[cfg(test)]
@@ -539,5 +790,235 @@ mod tests {
             ..Default::default()
         });
         assert!(result.is_err());
+    }
+
+    // ==================== N-01/N-02 query_devices ====================
+
+    #[test]
+    fn test_query_devices_excludes_deleted_by_default() {
+        let conn = setup_db();
+        let dev = create_test_device(&conn, "Alive", None);
+        let gone = create_test_device(&conn, "Gone", None);
+        soft_delete_device(&conn, gone.id).unwrap();
+
+        let (items, total) = query_devices(&conn, &DeviceQuery::default()).unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, dev.id);
+
+        // include_deleted = true 时全部返回
+        let (items2, total2) = query_devices(&conn, &DeviceQuery {
+            include_deleted: Some(true),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(total2, 2);
+        assert_eq!(items2.len(), 2);
+    }
+
+    #[test]
+    fn test_query_devices_multi_field_search() {
+        let conn = setup_db();
+        insert_device(&conn, &DeviceCreate { name: "TOK-Name".into(), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "B".into(), ip_addresses: Some("TOK-ip".into()), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "C".into(), serial_no: Some("TOK-SN".into()), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "D".into(), asset_no: Some("TOK-AS".into()), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "Nope".into(), ..Default::default() }).unwrap();
+
+        let (items, total) = query_devices(&conn, &DeviceQuery {
+            search: Some("TOK".into()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(total, 4);
+        assert_eq!(items.len(), 4);
+    }
+
+    #[test]
+    fn test_query_devices_sort_whitelist() {
+        let conn = setup_db();
+        insert_device(&conn, &DeviceCreate { name: "Zeta".into(), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "Alpha".into(), ..Default::default() }).unwrap();
+
+        let (items, total) = query_devices(&conn, &DeviceQuery {
+            sort_field: Some("name".into()),
+            sort_order: Some("desc".into()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(items[0].name, "Zeta");
+        assert_eq!(items[1].name, "Alpha");
+
+        // 非白名单字段回退 name（不得报错、不得注入）
+        let (items_fallback, _) = query_devices(&conn, &DeviceQuery {
+            sort_field: Some("name; DROP TABLE devices".into()),
+            sort_order: Some("desc".into()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(items_fallback.len(), 2);
+        assert_eq!(items_fallback[0].name, "Zeta");
+    }
+
+    #[test]
+    fn test_query_devices_pagination_and_filter() {
+        let conn = setup_db();
+        for i in 1..=5 {
+            create_test_device(&conn, &format!("Dev{}", i), Some(1));
+        }
+        create_test_device(&conn, "Other", Some(2));
+
+        // 机柜过滤 + 分页
+        let (page1, total) = query_devices(&conn, &DeviceQuery {
+            rack_id: Some(1),
+            limit: Some(2),
+            offset: Some(0),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(total, 5);
+        assert_eq!(page1.len(), 2);
+
+        let (page2, _) = query_devices(&conn, &DeviceQuery {
+            rack_id: Some(1),
+            limit: Some(2),
+            offset: Some(2),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(page2.len(), 2);
+        // 两页不重叠
+        assert_ne!(page1[0].id, page2[0].id);
+    }
+
+    // ==================== N-09 soft delete / restore ====================
+
+    #[test]
+    fn test_soft_delete_hides_and_supports_recreate_same_serial() {
+        let conn = setup_db();
+        let first = insert_device(&conn, &DeviceCreate {
+            name: "Old".into(),
+            serial_no: Some("SN-X".into()),
+            ..Default::default()
+        }).unwrap();
+
+        assert!(soft_delete_device(&conn, first.id).unwrap());
+        // 默认不可见
+        assert!(list_devices(&conn, None, None).unwrap().is_empty());
+        // 回收站可见
+        let deleted = list_deleted_devices(&conn, None).unwrap();
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].id, first.id);
+
+        // 同序列号可重建（部分唯一索引生效）
+        let second = insert_device(&conn, &DeviceCreate {
+            name: "New".into(),
+            serial_no: Some("SN-X".into()),
+            ..Default::default()
+        }).unwrap();
+        assert_ne!(first.id, second.id);
+
+        // active 之间仍强唯一
+        let dup = insert_device(&conn, &DeviceCreate {
+            name: "Dup".into(),
+            serial_no: Some("SN-X".into()),
+            ..Default::default()
+        });
+        assert!(dup.is_err(), "active 重复序列号必须被拒");
+    }
+
+    #[test]
+    fn test_soft_delete_device_idempotent_returns_false() {
+        let conn = setup_db();
+        let dev = create_test_device(&conn, "Once", None);
+        assert!(soft_delete_device(&conn, dev.id).unwrap());
+        // 再次软删：已删（deleted_at 非 NULL）→ 0 行
+        assert!(!soft_delete_device(&conn, dev.id).unwrap());
+        // 不存在的 id
+        assert!(!soft_delete_device(&conn, 9999).unwrap());
+    }
+
+    #[test]
+    fn test_restore_device_success() {
+        let conn = setup_db();
+        let dev = create_test_device(&conn, "RestoreMe", None);
+        soft_delete_device(&conn, dev.id).unwrap();
+        let restored = restore_device(&conn, dev.id).unwrap();
+        assert_eq!(restored.id, dev.id);
+        assert!(restored.deleted_at.is_none());
+        assert_eq!(list_devices(&conn, None, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_restore_conflict_returns_conflict() {
+        use crate::error::ErrorCode;
+        let conn = setup_db();
+        let old = insert_device(&conn, &DeviceCreate {
+            name: "Old".into(),
+            serial_no: Some("SN-C".into()),
+            ..Default::default()
+        }).unwrap();
+        soft_delete_device(&conn, old.id).unwrap();
+
+        // 软删期间用同序列号建了新设备
+        insert_device(&conn, &DeviceCreate {
+            name: "New".into(),
+            serial_no: Some("SN-C".into()),
+            ..Default::default()
+        }).unwrap();
+
+        let err = restore_device(&conn, old.id).unwrap_err();
+        match err {
+            AppError { code: ErrorCode::Conflict, .. } => {}
+            other => panic!("期望 Conflict，实际: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_restore_over_30_days_rejected() {
+        let conn = setup_db();
+        let dev = create_test_device(&conn, "TooOld", None);
+        soft_delete_device(&conn, dev.id).unwrap();
+
+        // 将 deleted_at 回拨到 31 天前
+        let past = (chrono::Utc::now() - chrono::Duration::days(31))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        conn.execute(
+            "UPDATE devices SET deleted_at = ?1 WHERE id = ?2",
+            params![past, dev.id],
+        ).unwrap();
+
+        let err = restore_device(&conn, dev.id);
+        assert!(err.is_err(), "超过 30 天必须拒绝恢复");
+    }
+
+    #[test]
+    fn test_restore_active_device_rejected() {
+        let conn = setup_db();
+        let dev = create_test_device(&conn, "Active", None);
+        // 未软删直接恢复 → 拒绝
+        assert!(restore_device(&conn, dev.id).is_err());
+    }
+
+    // ==================== N-20 delete_devices_batch ====================
+
+    #[test]
+    fn test_delete_devices_batch_counts_and_not_found() {
+        let conn = setup_db();
+        let a = create_test_device(&conn, "A", None);
+        let b = create_test_device(&conn, "B", None);
+
+        let (deleted, not_found) = delete_devices_batch(&conn, &[a.id, b.id, 9999]).unwrap();
+        assert_eq!(deleted, 2);
+        assert_eq!(not_found, vec![9999]);
+        assert!(list_devices(&conn, None, None).unwrap().is_empty());
+        assert_eq!(list_deleted_devices(&conn, None).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_delete_devices_batch_already_deleted_goes_to_not_found() {
+        let conn = setup_db();
+        let a = create_test_device(&conn, "A", None);
+        soft_delete_device(&conn, a.id).unwrap();
+
+        let (deleted, not_found) = delete_devices_batch(&conn, &[a.id]).unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(not_found, vec![a.id]);
     }
 }

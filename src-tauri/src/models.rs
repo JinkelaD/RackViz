@@ -223,10 +223,193 @@ pub struct DeviceUpdate {
     #[serde(default)] pub height_u: Patch<i32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// Excel 导入结果（N-04/N-21）。
+///
+/// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ImportResult {
+    /// 新增设备数
     pub imported: u32,
+    /// 覆盖更新数（`update_mode = overwrite` 命中已存在记录）
+    pub updated: u32,
+    /// 跳过数（`update_mode = skip` 命中已存在记录）
     pub skipped: u32,
+    /// 解析到的总数据行数
+    pub total: u32,
+    /// 本次新建型号数（N-21）
+    pub models_created: u32,
+    /// 告警（未知设备类型兜底 other、同名型号类型保持等，不阻断导入，N-21）
+    pub warnings: Vec<String>,
+    /// 错误明细
     pub errors: Vec<String>,
+}
+
+/// 设备分页查询参数（N-01/N-02）。
+///
+/// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**（字段名本身即为 snake_case）。
+/// 容器级 `#[serde(default)]`：任一字段缺失即取默认（`None`），便于前端按需只传部分条件。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct DeviceQuery {
+    /// 机柜过滤
+    pub rack_id: Option<i32>,
+    /// 机房过滤（经 `rack_id IN (SELECT id FROM racks WHERE room_id = ?)` 生效）
+    pub room_id: Option<i32>,
+    /// 多字段搜索词（name / ip_addresses / serial_no / asset_no，LIKE 子串，大小写不敏感）
+    pub search: Option<String>,
+    /// 是否包含已软删除记录（默认 false）
+    pub include_deleted: Option<bool>,
+    /// 排序字段（白名单：name|ip_addresses|serial_no|asset_no|status|power_watt|created_at|updated_at|rack_id）
+    pub sort_field: Option<String>,
+    /// 排序方向（仅 asc|desc，默认 asc）
+    pub sort_order: Option<String>,
+    /// 偏移量（默认 0）
+    pub offset: Option<i64>,
+    /// 每页数量（默认 100，上限 1000）
+    pub limit: Option<i64>,
+}
+
+/// 设备分页结果（N-01）。
+///
+/// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DevicePage {
+    /// 当前页设备
+    pub items: Vec<Device>,
+    /// 满足过滤条件的总记录数（用于前端分页器）
+    pub total: i64,
+}
+
+/// Excel 导入选项（N-04/N-05）。
+///
+/// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**。
+#[allow(dead_code)] // 由 T2.5（excel 导入选项）消费
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ImportOptions {
+    /// 已存在记录的更新模式：`"skip"`（跳过） | `"overwrite"`（覆盖）
+    pub update_mode: String,
+    /// 是否按「机房」列自动关联/创建机房（`find_or_create_room`，幂等）
+    pub link_room: bool,
+}
+
+/// 批量删除结果（N-20）。
+///
+/// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`** →
+/// JSON `{ "deleted": n, "not_found": [ids] }`。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DeleteBatchResult {
+    /// 成功（软）删除的设备数
+    pub deleted: u32,
+    /// 不存在 / 已被软删除而跳过的 id 列表（前端据此 `message.warning`）
+    pub not_found: Vec<i32>,
+}
+
+/// 备份/恢复结果（N-18）。
+///
+/// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**。
+#[allow(dead_code)] // 由 T2.6（备份恢复）消费
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RestoreResult {
+    /// 是否需重启应用方可生效
+    pub restart_required: bool,
+    /// 面向用户的提示信息
+    pub message: String,
+}
+
+/// 设备类型归一化（N-21）：接受中文名/英文枚举值，大小写不敏感、忽略空白与 `_`/`-`；
+/// 未知 / 空串 → `"other"`（兜底，不阻断导入）。
+///
+/// 返回 8 选 1 的静态字符串，与前端 `constants/labels.ts` 的 `DEVICE_TYPES` 一一对应
+/// （§8-14 双源同步）。映射表见架构设计 §3.3。
+#[allow(dead_code)] // 由 T2.8（excel 导入类型关联）消费
+pub fn normalize_device_type(raw: &str) -> &'static str {
+    // 归一化：trim → 小写 → 去除所有空白 / '_' / '-'
+    let key: String = raw
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '_' && *c != '-')
+        .collect();
+    match key.as_str() {
+        "server" | "服务器" => "server",
+        "switch" | "交换机" => "switch",
+        "router" | "路由器" => "router",
+        "storage" | "存储阵列" | "存储" => "storage",
+        "nas" | "nas存储" => "nas",
+        "security" | "网安设备" | "安全设备" => "security",
+        "loadbalancer" | "负载均衡" | "lb" => "loadbalancer",
+        "other" | "其他" => "other",
+        // 未知 / 空串兜底
+        _ => "other",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_device_type_chinese() {
+        assert_eq!(normalize_device_type("交换机"), "switch");
+        assert_eq!(normalize_device_type("服务器"), "server");
+        assert_eq!(normalize_device_type("路由器"), "router");
+        assert_eq!(normalize_device_type("存储阵列"), "storage");
+        assert_eq!(normalize_device_type("存储"), "storage");
+        assert_eq!(normalize_device_type("nas存储"), "nas");
+        assert_eq!(normalize_device_type("网安设备"), "security");
+        assert_eq!(normalize_device_type("安全设备"), "security");
+        assert_eq!(normalize_device_type("负载均衡"), "loadbalancer");
+        assert_eq!(normalize_device_type("其他"), "other");
+    }
+
+    #[test]
+    fn test_normalize_device_type_english() {
+        assert_eq!(normalize_device_type("router"), "router");
+        assert_eq!(normalize_device_type("server"), "server");
+        assert_eq!(normalize_device_type("switch"), "switch");
+        assert_eq!(normalize_device_type("storage"), "storage");
+        assert_eq!(normalize_device_type("nas"), "nas");
+        assert_eq!(normalize_device_type("security"), "security");
+        assert_eq!(normalize_device_type("other"), "other");
+    }
+
+    #[test]
+    fn test_normalize_device_type_case_whitespace_separators() {
+        assert_eq!(normalize_device_type(" Router "), "router");
+        assert_eq!(normalize_device_type("LOADBALANCER"), "loadbalancer");
+        assert_eq!(normalize_device_type("load_balancer"), "loadbalancer");
+        assert_eq!(normalize_device_type("Load-Balancer"), "loadbalancer");
+        assert_eq!(normalize_device_type("  SWITCH  "), "switch");
+        assert_eq!(normalize_device_type("lb"), "loadbalancer");
+        assert_eq!(normalize_device_type("NAS"), "nas");
+    }
+
+    #[test]
+    fn test_normalize_device_type_unknown_falls_back_to_other() {
+        assert_eq!(normalize_device_type("防火墙"), "other");
+        assert_eq!(normalize_device_type("工业网关"), "other");
+        assert_eq!(normalize_device_type(""), "other");
+        assert_eq!(normalize_device_type("   "), "other");
+        assert_eq!(normalize_device_type("whatever"), "other");
+    }
+
+    #[test]
+    fn test_new_dtos_serialize_snake_case() {
+        // 新 DTO 一律 snake_case（§8-15 N-A），确认无意外驼峰
+        let result = DeleteBatchResult { deleted: 2, not_found: vec![7, 8] };
+        let json = serde_json::to_string(&result).unwrap();
+        assert_eq!(json, r#"{"deleted":2,"not_found":[7,8]}"#);
+
+        let page = DevicePage { items: vec![], total: 5 };
+        let json = serde_json::to_string(&page).unwrap();
+        assert_eq!(json, r#"{"items":[],"total":5}"#);
+
+        let opts = ImportOptions { update_mode: "skip".into(), link_room: true };
+        let json = serde_json::to_string(&opts).unwrap();
+        assert_eq!(json, r#"{"update_mode":"skip","link_room":true}"#);
+
+        let restore = RestoreResult { restart_required: true, message: "ok".into() };
+        let json = serde_json::to_string(&restore).unwrap();
+        assert_eq!(json, r#"{"restart_required":true,"message":"ok"}"#);
+    }
 }

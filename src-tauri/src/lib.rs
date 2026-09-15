@@ -39,10 +39,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::devices::list_devices,
+            commands::devices::list_devices_all,
+            commands::devices::list_deleted_devices,
+            commands::devices::restore_device,
             commands::devices::get_device,
             commands::devices::create_device,
             commands::devices::update_device,
             commands::devices::delete_device,
+            commands::devices::delete_devices,
             commands::racks::list_racks,
             commands::racks::get_rack,
             commands::racks::create_rack,

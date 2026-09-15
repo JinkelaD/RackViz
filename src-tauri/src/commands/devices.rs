@@ -1,17 +1,44 @@
+use std::collections::HashSet;
 use tauri::State;
 use crate::state::DbState;
 use crate::models::*;
 use crate::db;
 use crate::error::AppError;
 
+/// 批量删除单次 IPC 的最大 id 数（N-20-5）。
+const DELETE_BATCH_MAX: usize = 1000;
+/// 批量删除日志最多记录的 id 个数（避免超长日志，N-20-5）。
+const DELETE_BATCH_LOG_PREVIEW: usize = 20;
+
+/// 分页查询设备台账（N-01/N-02）：服务端分页 + 多字段搜索 + 白名单排序。
 #[tauri::command]
-pub fn list_devices(
-    state: State<DbState>,
-    rack_id: Option<i32>,
-    search: Option<String>,
-) -> Result<Vec<Device>, AppError> {
+pub fn list_devices(state: State<DbState>, query: DeviceQuery) -> Result<DevicePage, AppError> {
     let conn = state.conn()?;
-    db::devices::list_devices(&conn, rack_id, search)
+    let (items, total) = db::devices::query_devices(&conn, &query)?;
+    Ok(DevicePage { items, total })
+}
+
+/// 全量列出设备（RackView / 导出 / 报表用，§3.3）。
+#[tauri::command]
+pub fn list_devices_all(state: State<DbState>) -> Result<Vec<Device>, AppError> {
+    let conn = state.conn()?;
+    db::devices::list_devices(&conn, None, None)
+}
+
+/// 回收站：列出已软删除设备（N-09）。
+#[tauri::command]
+pub fn list_deleted_devices(state: State<DbState>) -> Result<Vec<Device>, AppError> {
+    let conn = state.conn()?;
+    db::devices::list_deleted_devices(&conn, None)
+}
+
+/// 恢复软删除设备（N-09）：冲突预检 + 30 天窗口判定。
+#[tauri::command]
+pub fn restore_device(state: State<DbState>, id: i32) -> Result<Device, AppError> {
+    let conn = state.conn()?;
+    let dev = db::with_transaction(&conn, |c| db::devices::restore_device(c, id))?;
+    log::info!("[操作] 恢复设备: id={}, name={}", dev.id, dev.name);
+    Ok(dev)
 }
 
 #[tauri::command]
@@ -46,6 +73,7 @@ pub fn update_device(state: State<DbState>, id: i32, data: DeviceUpdate) -> Resu
     Ok(result)
 }
 
+/// 删除设备（N-09）：语义已由硬删改为**软删**，签名保持不变。
 #[tauri::command]
 pub fn delete_device(state: State<DbState>, id: i32) -> Result<bool, AppError> {
     let conn = state.conn()?;
@@ -57,9 +85,53 @@ pub fn delete_device(state: State<DbState>, id: i32) -> Result<bool, AppError> {
     };
     let result = db::with_transaction(&conn, |c| db::devices::delete_device(c, id))?;
     if result {
-        log::info!("[操作] 删除设备: id={}, name={}", id, dev_name);
+        log::info!("[操作] 删除设备(软删): id={}, name={}", id, dev_name);
     } else {
         log::warn!("[操作] 删除设备失败(未找到): id={}", id);
     }
     Ok(result)
+}
+
+/// 批量软删除设备（N-20）：单次 IPC；去重 + 上限校验；同事务循环复用单条软删。
+#[tauri::command]
+pub fn delete_devices(state: State<DbState>, ids: Vec<i32>) -> Result<DeleteBatchResult, AppError> {
+    // ids 去重（保持首次出现顺序）
+    let mut seen: HashSet<i32> = HashSet::new();
+    let mut unique: Vec<i32> = Vec::with_capacity(ids.len());
+    for id in ids {
+        if seen.insert(id) {
+            unique.push(id);
+        }
+    }
+
+    // 空选区：直接返回，不开启事务
+    if unique.is_empty() {
+        return Ok(DeleteBatchResult { deleted: 0, not_found: Vec::new() });
+    }
+
+    // 上限校验
+    if unique.len() > DELETE_BATCH_MAX {
+        return Err(AppError::validation(&format!(
+            "单次批量删除不能超过 {} 个设备（当前 {} 个）",
+            DELETE_BATCH_MAX,
+            unique.len()
+        )));
+    }
+
+    let conn = state.conn()?;
+    let (deleted, not_found) =
+        db::with_transaction(&conn, |c| db::devices::delete_devices_batch(c, &unique))?;
+
+    // 日志截断：只记「共 N 个 id，前 20 个: [...]」
+    let preview: Vec<i32> = unique.iter().take(DELETE_BATCH_LOG_PREVIEW).copied().collect();
+    log::info!(
+        "[操作] 批量删除设备: 共 {} 个 id, 前 {} 个: {:?}, 成功 {} 台, 跳过 {} 个",
+        unique.len(),
+        preview.len(),
+        preview,
+        deleted,
+        not_found.len()
+    );
+
+    Ok(DeleteBatchResult { deleted, not_found })
 }
