@@ -6,10 +6,17 @@
 <style>
 body { font-family: "Microsoft YaHei", "微软雅黑", sans-serif; padding: 40px; color: #333; }
 h1 { color: #1a1a2e; border-bottom: 2px solid #e0e0e0; padding-bottom: 12px; }
+h2 { color: #1a1a2e; font-size: 18px; margin: 0 0 12px 0; }
 .stats { display: flex; gap: 20px; margin: 24px 0; flex-wrap: wrap; }
 .stat-card { padding: 16px 24px; background: #f8f9fa; border-radius: 8px; min-width: 120px; }
 .stat-card h3 { margin: 0 0 8px 0; font-size: 14px; color: #666; font-weight: normal; }
 .stat-card .value { font-size: 28px; font-weight: bold; color: #1a1a2e; }
+.charts { display: flex; flex-wrap: wrap; gap: 24px; margin: 24px 0; }
+.chart-card { flex: 1 1 340px; padding: 20px; background: #fbfcfe; border: 1px solid #eef2f7; border-radius: 10px; }
+.chart-empty { color: #999; font-size: 13px; }
+.legend { list-style: none; padding: 0; margin: 16px 0 0 0; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.legend li { font-size: 13px; color: #555; display: flex; align-items: center; }
+.legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
 table { width: 100%; border-collapse: collapse; margin-top: 24px; }
 th { background: #e8eef4; text-align: left; padding: 10px 12px; font-weight: 600; }
 td { padding: 8px 12px; border-bottom: 1px solid #eee; }
@@ -40,6 +47,45 @@ tr:hover { background: #f8f9fa; }
   <div class="stat-card">
     <h3>⚪ 未上架</h3>
     <div class="value">{{ unconfigured_count }}</div>
+  </div>
+</div>
+
+<div class="charts">
+  <!-- N-17：机房 U 位使用率（手写内联 SVG 柱状图，零图表依赖） -->
+  <div class="chart-card">
+    <h2>🏢 机房 U 位使用率</h2>
+    {% if has_rooms %}
+    <svg width="100%" viewBox="0 0 640 {{ bar_chart_height }}" preserveAspectRatio="xMinYMin meet" role="img" aria-label="机房 U 位使用率柱状图">
+      {% for r in room_utils %}
+      <text x="0" y="{{ r.text_y }}" font-size="12" fill="#444">{{ r.name }}</text>
+      <rect x="150" y="{{ r.y }}" width="320" height="16" rx="3" fill="#eef2f7"/>
+      <rect x="150" y="{{ r.y }}" width="{{ r.bar_px }}" height="16" rx="3" fill="#2f80ed"/>
+      <text x="480" y="{{ r.text_y }}" font-size="12" fill="#666">{{ r.used_u }}/{{ r.total_u }}U（{{ r.pct }}%）</text>
+      {% endfor %}
+    </svg>
+    {% else %}
+    <p class="chart-empty">暂无机房数据</p>
+    {% endif %}
+  </div>
+
+  <!-- N-17：设备类型分布（手写内联 SVG 堆叠条） -->
+  <div class="chart-card">
+    <h2>🧩 设备类型分布（共 {{ type_total }} 台）</h2>
+    {% if has_types %}
+    <svg width="100%" viewBox="0 0 480 34" preserveAspectRatio="xMinYMin meet" role="img" aria-label="设备类型分布堆叠条">
+      <rect x="0" y="0" width="480" height="34" rx="4" fill="#eef2f7"/>
+      {% for s in type_slices %}
+      <rect x="{{ s.x }}" y="0" width="{{ s.width }}" height="34" fill="{{ s.color }}"><title>{{ s.label }}：{{ s.count }} 台（{{ s.pct }}%）</title></rect>
+      {% endfor %}
+    </svg>
+    <ul class="legend">
+      {% for s in type_slices %}
+      <li><span class="dot" style="background:{{ s.color }}"></span>{{ s.label }} {{ s.count }}（{{ s.pct }}%）</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="chart-empty">暂无设备数据</p>
+    {% endif %}
   </div>
 </div>
 
