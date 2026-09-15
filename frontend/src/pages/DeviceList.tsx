@@ -1,12 +1,13 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import type { Key } from 'react';
 import { Table, Button, Input, Popover, Checkbox, App, Dropdown } from 'antd';
+import type { TableProps } from 'antd';
 import { PlusOutlined, SettingOutlined, ColumnHeightOutlined, UploadOutlined, ExportOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useDevices } from '../hooks/useDevices';
+import { usePagedDevices } from '../hooks/usePagedDevices';
 import { useDeviceModels } from '../hooks/useDeviceModels';
 import { useRacks } from '../hooks/useRacks';
 import { useRooms } from '../hooks/useRooms';
-import { Device } from '../types';
+import { Device, DeviceSortField } from '../types';
 import { useRoomContext } from '../contexts/RoomContext';
 import * as tauriApi from '../tauri-api';
 import DeviceFormModal from '../components/device/DeviceFormModal';
@@ -20,21 +21,18 @@ import { ALL_COLUMNS, DEFAULT_COLUMN_WIDTHS, buildDeviceColumns, DeviceColumnKey
 const MAX_BATCH_DELETE = 1000;
 
 export default function DeviceList() {
-  const { devices, loading, refresh, remove, create, update, removeMany } = useDevices();
+  const { selectedRoomId } = useRoomContext();
   const { models, create: createModel, update: updateModel, remove: removeModel } = useDeviceModels();
   const { racks } = useRacks();
   const { rooms } = useRooms();
-  const { selectedRoomId } = useRoomContext();
   const { modal, message } = App.useApp();
 
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  // T3.2：服务端分页 + 多字段搜索 + 排序（机房过滤经 room_id 下推服务端）
+  const { items, total, loading, query, setQuery, refresh } = usePagedDevices({
+    room_id: selectedRoomId,
+    limit: 10,
+  });
 
-  const roomRackIds = useMemo(() => {
-    if (selectedRoomId === null) return null;
-    return new Set(racks.filter(r => r.room_id === selectedRoomId).map(r => r.id));
-  }, [racks, selectedRoomId]);
-  const [searchText, setSearchText] = useState('');
   const [deviceModalVisible, setDeviceModalVisible] = useState(false);
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
 
@@ -44,6 +42,8 @@ export default function DeviceList() {
 
   // N-20：选区（以 id 集合维护，preserveSelectedRowKeys 支持跨页/排序/搜索保持）
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
+  // 已选设备对象缓存（跨页时用于「在架」计数；onChange 的 second 参数仅含当前页选中行）
+  const [selectedDeviceMap, setSelectedDeviceMap] = useState<Record<number, Device>>({});
   const [batchDeleting, setBatchDeleting] = useState(false);
 
   const [visibleColumns, setVisibleColumns] = useState<DeviceColumnKey[]>(
@@ -61,9 +61,15 @@ export default function DeviceList() {
     setColumnWidths(prev => ({ ...prev, [key]: width }));
   }, []);
 
+  // 切机房 → 下推 room_id（服务端过滤，与搜索叠加）；跳过首帧避免与初始查询重复取数
+  const firstRoomSync = useRef(true);
   useEffect(() => {
-    setCurrentPage(1);
-  }, [searchText, selectedRoomId]);
+    if (firstRoomSync.current) {
+      firstRoomSync.current = false;
+      return;
+    }
+    setQuery({ room_id: selectedRoomId });
+  }, [selectedRoomId, setQuery]);
 
   const showDeviceModal = useCallback((device?: Device) => {
     setEditingDevice(device ?? null);
@@ -73,13 +79,14 @@ export default function DeviceList() {
   const handleDeviceSave = async (payload: Record<string, unknown>, editing: Device | null) => {
     try {
       if (editing) {
-        await update(editing.id, payload as Partial<Device>);
+        await tauriApi.updateDevice(editing.id, payload as Partial<Device>);
       } else {
-        await create(payload as Partial<Device>);
+        await tauriApi.createDevice(payload as unknown as tauriApi.DeviceCreate);
       }
       setDeviceModalVisible(false);
       setEditingDevice(null);
       message.success(editing ? '设备已更新' : '设备已添加');
+      refresh();
     } catch (error) {
       console.error('保存设备失败:', error);
       message.error('保存设备失败，请重试');
@@ -96,7 +103,7 @@ export default function DeviceList() {
     setModelModalVisible(false);
   };
 
-  // 单条删除：保持既有乐观更新语义（N-09 已改为软删，提示文案相应更新）
+  // 单条删除（N-09 软删除；非乐观：成功后重取当前页）
   const handleDeleteDevice = useCallback((device: Device) => {
     modal.confirm({
       title: '确认删除',
@@ -104,20 +111,23 @@ export default function DeviceList() {
       okText: '删除',
       okType: 'danger',
       cancelText: '取消',
-      onOk: () => remove(device.id),
+      onOk: async () => {
+        try {
+          await tauriApi.deleteDevice(device.id);
+          refresh();
+        } catch (err) {
+          message.error(`删除失败：${tauriApi.errorMessage(err)}`);
+        }
+      },
     });
-  }, [modal, remove]);
+  }, [modal, message, refresh]);
 
   // ---------- N-20 批量删除：选区派生 ----------
-  const selectedDevices = useMemo(
-    () => selectedRowKeys
-      .map(k => devices.find(d => d.id === Number(k)))
-      .filter((d): d is Device => Boolean(d)),
-    [selectedRowKeys, devices],
-  );
   const onsiteSelectedCount = useMemo(
-    () => selectedDevices.filter(d => d.rack_id != null).length,
-    [selectedDevices],
+    () => selectedRowKeys
+      .map(k => selectedDeviceMap[Number(k)])
+      .filter(d => d && d.rack_id != null).length,
+    [selectedRowKeys, selectedDeviceMap],
   );
 
   const handleBatchDelete = useCallback(() => {
@@ -134,7 +144,9 @@ export default function DeviceList() {
       return;
     }
     // ④ 在架设备计数警告
-    const onsiteCount = selectedDevices.filter(d => d.rack_id != null).length;
+    const onsiteCount = ids
+      .map(id => selectedDeviceMap[id])
+      .filter(d => d && d.rack_id != null).length;
 
     modal.confirm({
       title: '确认批量删除',
@@ -154,15 +166,17 @@ export default function DeviceList() {
         // ⑤ 提交中禁用防重复（submitting）
         setBatchDeleting(true);
         try {
-          const result = await removeMany(ids);
+          const result = await tauriApi.deleteDevices(ids);
           // ⑧ 成功后清空选区
           setSelectedRowKeys([]);
+          setSelectedDeviceMap({});
           if (result.not_found.length > 0) {
             // ⑥ not_found 非空提示
             message.warning(`已删除 ${result.deleted} 台，${result.not_found.length} 台不存在已跳过`);
           } else {
             message.success(`已删除 ${result.deleted} 台设备`);
           }
+          refresh();
         } catch (err) {
           // ⑦ 事务失败（后端整体回滚）：本地列表不变 + message.error（不 rethrow → 弹窗关闭）
           message.error(`批量删除失败：${tauriApi.errorMessage(err)}`);
@@ -171,27 +185,57 @@ export default function DeviceList() {
         }
       },
     });
-  }, [selectedRowKeys, selectedDevices, modal, message, removeMany]);
+  }, [selectedRowKeys, selectedDeviceMap, modal, message, refresh]);
 
   const rowSelection = {
     selectedRowKeys,
     preserveSelectedRowKeys: true,
-    onChange: (keys: Key[]) => setSelectedRowKeys(keys),
+    onChange: (keys: Key[], rows: Device[]) => {
+      setSelectedRowKeys(keys);
+      // 累积已知选中行对象（供跨页「在架」计数），并剔除已取消项
+      setSelectedDeviceMap(prev => {
+        const next: Record<number, Device> = { ...prev };
+        rows.forEach(r => { next[r.id] = r; });
+        const keySet = new Set(keys.map(Number));
+        Object.keys(next).forEach(k => {
+          if (!keySet.has(Number(k))) delete next[Number(k)];
+        });
+        return next;
+      });
+    },
   };
 
-  const filteredDevices = useMemo(() => devices.filter(d => {
-    if (!d.name.toLowerCase().includes(searchText.toLowerCase())) return false;
-    if (roomRackIds === null) return true;
-    if (d.rack_id === null) return false;
-    return roomRackIds.has(d.rack_id);
-  }), [devices, searchText, roomRackIds]);
+  // 服务端分页 + 排序：由 pagination/sorter 变化驱动 query
+  const handleTableChange: TableProps<Device>['onChange'] = (pag, _filters, sorter) => {
+    const s = Array.isArray(sorter) ? sorter[0] : sorter;
+    const rawField = s?.field;
+    const field = (Array.isArray(rawField) ? rawField[0] : rawField) as DeviceSortField | undefined;
+    const order: 'asc' | 'desc' | null = s?.order === 'ascend' ? 'asc' : s?.order === 'descend' ? 'desc' : null;
+    const nextSortField = order && field ? field : null;
+
+    const sortChanged =
+      nextSortField !== (query.sort_field ?? null) || order !== (query.sort_order ?? null);
+    const size = pag.pageSize ?? query.limit ?? 10;
+
+    setQuery({
+      limit: size,
+      // 排序变化时回到第一页；否则按目标页计算 offset
+      offset: sortChanged ? 0 : ((pag.current ?? 1) - 1) * size,
+      sort_field: nextSortField,
+      sort_order: order,
+    });
+  };
 
   const allDeviceColumns = useMemo(
     () => buildDeviceColumns(models, racks, rooms, {
       onEdit: showDeviceModal,
       onDelete: handleDeleteDevice,
+    }, {
+      search: query.search ?? '',
+      sortField: query.sort_field ?? null,
+      sortOrder: query.sort_order ?? null,
     }),
-    [models, racks, rooms, showDeviceModal, handleDeleteDevice],
+    [models, racks, rooms, showDeviceModal, handleDeleteDevice, query.search, query.sort_field, query.sort_order],
   );
 
   const visibleDeviceColumns = allDeviceColumns
@@ -263,9 +307,9 @@ export default function DeviceList() {
           </Button>
           <Input
             className="device-list-search"
-            placeholder="搜索设备..."
-            value={searchText}
-            onChange={e => setSearchText(e.target.value)}
+            placeholder="搜索名称 / IP / 序列号 / 资产编号..."
+            value={query.search ?? ''}
+            onChange={e => setQuery({ search: e.target.value })}
           />
         </div>
       </div>
@@ -281,7 +325,7 @@ export default function DeviceList() {
             <Button type="primary" danger loading={batchDeleting} disabled={batchDeleting} onClick={handleBatchDelete}>
               批量删除
             </Button>
-            <Button disabled={batchDeleting} onClick={() => setSelectedRowKeys([])}>
+            <Button disabled={batchDeleting} onClick={() => { setSelectedRowKeys([]); setSelectedDeviceMap({}); }}>
               取消选择
             </Button>
           </div>
@@ -290,22 +334,20 @@ export default function DeviceList() {
 
       <div className="device-list-table-wrap">
         <Table
-          dataSource={filteredDevices}
+          dataSource={items}
           columns={visibleDeviceColumns}
           components={components}
           loading={loading}
           rowKey="id"
           rowSelection={rowSelection}
+          onChange={handleTableChange}
           pagination={{
-            current: currentPage,
-            pageSize,
+            current: Math.floor((query.offset ?? 0) / (query.limit ?? 10)) + 1,
+            pageSize: query.limit ?? 10,
+            total,
             pageSizeOptions: [10, 20, 50],
             showSizeChanger: true,
-            showTotal: (total: number) => `共 ${total} 条`,
-            onChange: (page, size) => {
-              setCurrentPage(page);
-              setPageSize(size);
-            },
+            showTotal: (t: number) => `共 ${t} 条`,
           }}
           bordered={false}
           scroll={{ x: 'max-content' }}

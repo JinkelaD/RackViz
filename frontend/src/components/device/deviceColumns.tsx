@@ -1,9 +1,10 @@
 import { Tag, Space, Button } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { Device, DeviceModel, Rack, Room } from '../../types';
+import type { Device, DeviceModel, Rack, Room, DeviceSortField } from '../../types';
+import HighlightText from './HighlightText';
 
-export type DeviceColumnKey = 'name' | 'model' | 'rack' | 'room' | 'position' | 'ip' | 'asset_no' | 'department' | 'owner' | 'status' | 'created_at' | 'updated_at' | 'action';
+export type DeviceColumnKey = 'name' | 'model' | 'room' | 'rack' | 'position' | 'ip' | 'serial_no' | 'asset_no' | 'department' | 'owner' | 'status' | 'created_at' | 'updated_at' | 'action';
 
 export const ALL_COLUMNS: { key: DeviceColumnKey; title: string }[] = [
   { key: 'name', title: '设备名称' },
@@ -12,6 +13,7 @@ export const ALL_COLUMNS: { key: DeviceColumnKey; title: string }[] = [
   { key: 'rack', title: '机柜' },
   { key: 'position', title: '位置' },
   { key: 'ip', title: 'IP' },
+  { key: 'serial_no', title: '序列号' },
   { key: 'asset_no', title: '资产编号' },
   { key: 'department', title: '使用部门' },
   { key: 'owner', title: '责任人' },
@@ -28,6 +30,7 @@ export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   rack: 110,
   position: 90,
   ip: 140,
+  serial_no: 140,
   asset_no: 130,
   department: 120,
   owner: 100,
@@ -66,13 +69,39 @@ export interface DeviceActions {
   onDelete: (device: Device) => void;
 }
 
+/** 服务端分页/排序/高亮所需的受控状态（由 DeviceList 传入） */
+export interface DeviceColumnOptions {
+  /** 当前搜索关键词（用于高亮；空则不包裹 <mark>） */
+  search?: string | null;
+  /** 当前服务端排序字段（受控 sortOrder 依据） */
+  sortField?: DeviceSortField | null;
+  /** 当前服务端排序方向 */
+  sortOrder?: 'asc' | 'desc' | null;
+}
+
+/**
+ * 生成「服务端排序」列配置（受控）：
+ * 仅白名单字段可排序（name|ip_addresses|serial_no|asset_no|status|power_watt|created_at|updated_at|rack_id），
+ * 其余列不给 sorter，避免前端裸排序与后端白名单不一致。
+ */
+function serverSorter(field: DeviceSortField, opts: DeviceColumnOptions) {
+  const active = opts.sortField === field && (opts.sortOrder === 'asc' || opts.sortOrder === 'desc');
+  return {
+    sorter: true as const,
+    sortOrder: active ? (opts.sortOrder === 'desc' ? ('descend' as const) : ('ascend' as const)) : null,
+  };
+}
+
 /** 设备台账表格列定义（外置模块：避免每次渲染重建 + 缩小 DeviceList） */
 export function buildDeviceColumns(
   models: DeviceModel[],
   racks: Rack[],
   rooms: Room[],
   actions: DeviceActions,
+  opts: DeviceColumnOptions = {},
 ): ColumnsType<Device> {
+  const keyword = opts.search ?? '';
+
   const getModelName = (modelId: number | null) => {
     if (modelId === null) return '-';
     return models.find(m => m.id === Number(modelId))?.name || '-';
@@ -90,31 +119,50 @@ export function buildDeviceColumns(
   };
 
   return [
-    { title: '设备名称', dataIndex: 'name', key: 'name', sorter: (a, b) => a.name.localeCompare(b.name, 'zh') },
-    { title: '型号', dataIndex: 'device_model_id', key: 'model', render: (id: number | null) => getModelName(id), sorter: (a, b) => getModelName(a.device_model_id).localeCompare(getModelName(b.device_model_id), 'zh') },
-    { title: '机房', dataIndex: 'rack_id', key: 'room', render: (id: number | null) => getRoomName(id), sorter: (a, b) => getRoomName(a.rack_id).localeCompare(getRoomName(b.rack_id), 'zh') },
-    { title: '机柜', dataIndex: 'rack_id', key: 'rack', render: (id: number | null) => getRackName(id), sorter: (a, b) => getRackName(a.rack_id).localeCompare(getRackName(b.rack_id), 'zh') },
-    { title: '位置', key: 'position', render: (_: unknown, record: Device) => record.start_u && record.end_u ? `${record.start_u}-${record.end_u}U` : '-', sorter: (a, b) => (a.start_u || 0) - (b.start_u || 0) },
-    { title: 'IP', dataIndex: 'ip_addresses', key: 'ip', render: (ips: string) => ips || '-', sorter: (a, b) => (a.ip_addresses || '').localeCompare(b.ip_addresses || '') },
-    { title: '资产编号', dataIndex: 'asset_no', key: 'asset_no', render: (no: string) => no || '-', sorter: (a, b) => (a.asset_no || '').localeCompare(b.asset_no || '') },
-    { title: '使用部门', dataIndex: 'department', key: 'department', render: (dept: string) => dept || '-', sorter: (a, b) => (a.department || '').localeCompare(b.department || '', 'zh') },
-    { title: '责任人', dataIndex: 'owner', key: 'owner', render: (owner: string) => owner || '-', sorter: (a, b) => (a.owner || '').localeCompare(b.owner || '', 'zh') },
-    { title: '状态', dataIndex: 'status', key: 'status', render: (status: string) => getStatusTag(status), sorter: (a, b) => a.status.localeCompare(b.status) },
     {
-      title: '创建时间',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      width: 150,
-      render: (v: string | null) => formatTimestamp(v),
-      sorter: (a, b) => (a.created_at || '').localeCompare(b.created_at || ''),
+      title: '设备名称', dataIndex: 'name', key: 'name',
+      ...serverSorter('name', opts),
+      render: (v: string) => <HighlightText text={v} keyword={keyword} />,
+    },
+    { title: '型号', dataIndex: 'device_model_id', key: 'model', render: (id: number | null) => getModelName(id) },
+    { title: '机房', dataIndex: 'rack_id', key: 'room', render: (id: number | null) => getRoomName(id) },
+    {
+      title: '机柜', dataIndex: 'rack_id', key: 'rack',
+      ...serverSorter('rack_id', opts),
+      render: (id: number | null) => getRackName(id),
+    },
+    { title: '位置', key: 'position', render: (_: unknown, record: Device) => record.start_u && record.end_u ? `${record.start_u}-${record.end_u}U` : '-' },
+    {
+      title: 'IP', dataIndex: 'ip_addresses', key: 'ip',
+      ...serverSorter('ip_addresses', opts),
+      render: (ips: string) => <HighlightText text={ips} keyword={keyword} />,
     },
     {
-      title: '更新时间',
-      dataIndex: 'updated_at',
-      key: 'updated_at',
-      width: 150,
+      title: '序列号', dataIndex: 'serial_no', key: 'serial_no',
+      ...serverSorter('serial_no', opts),
+      render: (v: string) => <HighlightText text={v} keyword={keyword} />,
+    },
+    {
+      title: '资产编号', dataIndex: 'asset_no', key: 'asset_no',
+      ...serverSorter('asset_no', opts),
+      render: (v: string) => <HighlightText text={v} keyword={keyword} />,
+    },
+    { title: '使用部门', dataIndex: 'department', key: 'department', render: (dept: string) => dept || '-' },
+    { title: '责任人', dataIndex: 'owner', key: 'owner', render: (owner: string) => owner || '-' },
+    {
+      title: '状态', dataIndex: 'status', key: 'status',
+      ...serverSorter('status', opts),
+      render: (status: string) => getStatusTag(status),
+    },
+    {
+      title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 150,
+      ...serverSorter('created_at', opts),
       render: (v: string | null) => formatTimestamp(v),
-      sorter: (a, b) => (a.updated_at || '').localeCompare(b.updated_at || ''),
+    },
+    {
+      title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 150,
+      ...serverSorter('updated_at', opts),
+      render: (v: string | null) => formatTimestamp(v),
     },
     {
       title: '操作', key: 'action', fixed: 'right' as const,
