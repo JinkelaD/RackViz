@@ -5,6 +5,8 @@ import { useDevices } from './useDevices';
 import { useDeviceModels } from './useDeviceModels';
 import { useViewContext } from '../contexts/ViewContext';
 import { useRoomContext } from '../contexts/RoomContext';
+import { useUndo } from '../contexts/UndoContext';
+import { useRegisterShortcuts } from './useGlobalShortcuts';
 import { Device, DeviceModel, Room, Rack } from '../types';
 import { findAvailableSlot } from '../utils/rackLayout';
 import * as tauriApi from '../tauri-api';
@@ -25,6 +27,7 @@ export interface RackViewStats {
  */
 export function useRackView() {
   const { modal, message } = App.useApp();
+  const { pushUndo, undo } = useUndo();
 
   const viewCtx = useViewContext();
   const {
@@ -36,13 +39,13 @@ export function useRackView() {
     racks, create: createRack, remove: removeRack,
     update: updateRack, updateQuiet: updateRackQuiet, refresh: refreshRacks,
   } = useRacks();
-  const { devices, update, remove } = useDevices();
+  const { devices, update, remove, refresh: refreshDevices } = useDevices();
   const { models } = useDeviceModels();
 
   const [selectedRackId, setSelectedRackId] = useState<number | null>(null);
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [draggingDevice, setDraggingDevice] = useState<Device | null>(null);
-  const [dropTarget, setDropTarget] = useState<{ rackId: number; u: number; deviceHeight: number } | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ rackId: number; u: number; deviceHeight: number; deviceName: string } | null>(null);
   const [dragOverStock, setDragOverStock] = useState(false);
 
   const [hoveredDeviceId, setHoveredDeviceId] = useState<number | null>(null);
@@ -199,10 +202,18 @@ export function useRackView() {
   }, [racks, view, createRack, setShowAddRack]);
 
   const handleDetailDeviceSave = useCallback(async (id: number, values: Record<string, unknown>) => {
+    const prev = devices.find(d => d.id === id);
     await update(id, values as Partial<Device>);
+    if (prev) {
+      const inverse: Partial<Device> = {};
+      Object.keys(values).forEach(k => {
+        (inverse as Record<string, unknown>)[k] = (prev as unknown as Record<string, unknown>)[k];
+      });
+      pushUndo({ label: `编辑设备「${prev.name}」`, undo: async () => { await update(id, inverse); } });
+    }
     setDeviceDetailVisible(false);
     setDetailDevice(null);
-  }, [update]);
+  }, [devices, update, pushUndo]);
 
   const handleRackEditSave = useCallback(async (id: number, values: { name: string; room_id: number | null }) => {
     await updateRack(id, values);
@@ -241,7 +252,7 @@ export function useRackView() {
     e.preventDefault();
     const model = draggingDevice ? getDeviceModel(draggingDevice.device_model_id) : undefined;
     const deviceHeight = draggingDevice ? resolveDeviceHeight(draggingDevice, model) : 1;
-    setDropTarget({ rackId, u, deviceHeight });
+    setDropTarget({ rackId, u, deviceHeight, deviceName: draggingDevice?.name ?? '' });
   }, [draggingDevice, getDeviceModel, resolveDeviceHeight]);
 
   const handleDragLeave = useCallback(() => {
@@ -278,6 +289,17 @@ export function useRackView() {
       return;
     }
 
+    const prev = {
+      rack_id: draggingDevice.rack_id,
+      start_u: draggingDevice.start_u,
+      end_u: draggingDevice.end_u,
+      height_u: draggingDevice.height_u,
+      status: draggingDevice.status,
+    };
+    const label = draggingDevice.rack_id == null
+      ? `上架设备「${draggingDevice.name}」`
+      : `移动设备「${draggingDevice.name}」`;
+
     await update(draggingDevice.id, {
       rack_id: rackId,
       start_u: slot.startU,
@@ -286,8 +308,14 @@ export function useRackView() {
       ...(draggingDevice.status === 'unconfigured' ? { status: 'offline' as const } : {}),
     });
 
+    // N-11 撤销：用 Patch 逆操作回填原 U 位/机柜
+    pushUndo({
+      label,
+      undo: async () => { await update(draggingDevice.id, prev); },
+    });
+
     handleDragEnd();
-  }, [draggingDevice, racks, update, handleDragEnd, getDevicesForRack, getDeviceModel, resolveDeviceHeight, message]);
+  }, [draggingDevice, racks, update, handleDragEnd, getDevicesForRack, getDeviceModel, resolveDeviceHeight, message, pushUndo]);
 
   const handleStockDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -297,18 +325,33 @@ export function useRackView() {
     }
   }, [draggingDevice]);
 
-  const handleStockDrop = useCallback(async (e: React.DragEvent) => {
+  const handleStockDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOverStock(false);
-    if (draggingDevice && draggingDevice.rack_id != null) {
-      await update(draggingDevice.id, {
-        rack_id: null,
-        start_u: null,
-        end_u: null,
-      });
-    }
+    const device = draggingDevice;
     handleDragEnd();
-  }, [draggingDevice, update, handleDragEnd]);
+    if (!device || device.rack_id == null) return;
+
+    // N-13 下架二次确认；N-11 撤销用 Patch 逆操作回填原 U 位
+    modal.confirm({
+      title: '确认下架',
+      content: `确定要将设备「${device.name}」下架到资源池吗？其占用的 U 位将被释放。`,
+      okText: '下架',
+      cancelText: '取消',
+      onOk: async () => {
+        const prev = { rack_id: device.rack_id, start_u: device.start_u, end_u: device.end_u };
+        await update(device.id, {
+          rack_id: null,
+          start_u: null,
+          end_u: null,
+        });
+        pushUndo({
+          label: `下架设备「${device.name}」`,
+          undo: async () => { await update(device.id, prev); },
+        });
+      },
+    });
+  }, [draggingDevice, update, handleDragEnd, modal, pushUndo]);
 
   const handleRemoveRack = async (rackId: number) => {
     const rack = racks.find(r => r.id === rackId);
@@ -374,6 +417,54 @@ export function useRackView() {
     rack: racks.find(r => r.id === selectedDevice.rack_id),
   } : null;
 
+  // ---------- N-11：详情面板直接透传的 update / remove 包一层，登记撤销 ----------
+  const updateWithUndo = useCallback(async (id: number, data: Partial<Device>) => {
+    const prev = devices.find(d => d.id === id);
+    await update(id, data);
+    if (prev) {
+      const inverse: Partial<Device> = {};
+      Object.keys(data).forEach(k => {
+        (inverse as Record<string, unknown>)[k] = (prev as unknown as Record<string, unknown>)[k];
+      });
+      pushUndo({ label: `编辑设备「${prev.name}」`, undo: async () => { await update(id, inverse); } });
+    }
+  }, [devices, update, pushUndo]);
+
+  const removeWithUndo = useCallback(async (id: number) => {
+    const prev = devices.find(d => d.id === id);
+    await remove(id);
+    if (prev) {
+      pushUndo({
+        label: `删除设备「${prev.name}」`,
+        undo: async () => { await tauriApi.restoreDevice(id); refreshDevices(); },
+      });
+    }
+  }, [devices, remove, pushUndo, refreshDevices]);
+
+  /** N-12：Delete —— 删除当前选中设备（二次确认；无选中则无副作用） */
+  const handleDeleteSelectedDevice = useCallback(() => {
+    const device = selectedDevice;
+    if (!device) return;
+    modal.confirm({
+      title: '确认删除',
+      content: `确定要删除设备「${device.name}」吗？删除后可在 30 天内在「回收站」恢复。`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        await removeWithUndo(device.id);
+        setSelectedDevice(null);
+      },
+    });
+  }, [selectedDevice, modal, removeWithUndo]);
+
+  // N-12 全局快捷键（RackView 上下文）：Ctrl+Z 撤销 / Delete 删除选中 / F5 刷新
+  useRegisterShortcuts({
+    onUndo: () => { void undo(); },
+    onDelete: handleDeleteSelectedDevice,
+    onRefresh: () => { refreshDevices(); refreshRacks(); },
+  });
+
   return {
     // context / hooks
     view, zoom, onZoomIn, onZoomOut, onZoomReset,
@@ -396,8 +487,8 @@ export function useRackView() {
     handleMoveRackLeft, handleMoveRackRight,
     handleSidebarDeviceClick,
     handleExportRackPlan, handleExportSingleRack,
-    // 直接回调透传
-    update, remove,
+    // 直接回调透传（详情面板经此登记撤销）
+    update: updateWithUndo, remove: removeWithUndo,
     closeDeviceDetail: () => { setDeviceDetailVisible(false); setDetailDevice(null); },
     closeRackEdit: () => { setRackEditVisible(false); setEditingRack(null); },
     clearSelectedDevice: () => setSelectedDevice(null),

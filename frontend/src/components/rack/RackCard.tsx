@@ -5,6 +5,8 @@ export interface DropTarget {
   rackId: number;
   u: number;
   deviceHeight: number;
+  /** 被拖拽设备名称（N-13 拖拽 tooltip 展示） */
+  deviceName: string;
 }
 
 interface RackCardProps {
@@ -175,6 +177,33 @@ export default function RackCard(props: RackCardProps) {
             </div>
           </div>
         </div>
+
+        {/* N-13 拖拽 tooltip：显示将被放置的设备名与目标 U 位区间 */}
+        {dropTarget?.rackId === rack.id && draggingDeviceId != null && (
+          <div
+            className="drag-target-tooltip"
+            style={{
+              position: 'absolute',
+              top: `${Math.max(0, rack.height_u - (dropTarget.u + dropTarget.deviceHeight - 1)) * 26}px`,
+              left: '50%',
+              transform: 'translate(-50%, -100%)',
+              zIndex: 30,
+              pointerEvents: 'none',
+              background: 'var(--bg-elevated)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-active)',
+              borderRadius: 6,
+              padding: '4px 8px',
+              fontSize: 12,
+              lineHeight: 1.5,
+              whiteSpace: 'nowrap',
+              boxShadow: 'var(--shadow-md)',
+            }}
+          >
+            <div>上架：{dropTarget.deviceName}</div>
+            <div>U {dropTarget.u}-{dropTarget.u + dropTarget.deviceHeight - 1}（{dropTarget.deviceHeight}U）</div>
+          </div>
+        )}
       </div>
     </div>
   );

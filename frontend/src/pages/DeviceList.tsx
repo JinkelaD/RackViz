@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import type { Key } from 'react';
 import { Table, Button, Input, Popover, Checkbox, App, Dropdown } from 'antd';
-import type { TableProps } from 'antd';
+import type { TableProps, InputRef } from 'antd';
 import { PlusOutlined, SettingOutlined, ColumnHeightOutlined, UploadOutlined, ExportOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons';
 import { usePagedDevices } from '../hooks/usePagedDevices';
 import { useDeviceModels } from '../hooks/useDeviceModels';
@@ -9,6 +9,8 @@ import { useRacks } from '../hooks/useRacks';
 import { useRooms } from '../hooks/useRooms';
 import { Device, DeviceSortField } from '../types';
 import { useRoomContext } from '../contexts/RoomContext';
+import { useUndo } from '../contexts/UndoContext';
+import { useRegisterShortcuts } from '../hooks/useGlobalShortcuts';
 import * as tauriApi from '../tauri-api';
 import DeviceFormModal from '../components/device/DeviceFormModal';
 import ModelManageModal from '../components/device/ModelManageModal';
@@ -26,6 +28,8 @@ export default function DeviceList() {
   const { racks } = useRacks();
   const { rooms } = useRooms();
   const { modal, message } = App.useApp();
+  const { pushUndo, undo } = useUndo();
+  const searchInputRef = useRef<InputRef>(null);
 
   // T3.2：服务端分页 + 多字段搜索 + 排序（机房过滤经 room_id 下推服务端）
   const { items, total, loading, query, setQuery, refresh } = usePagedDevices({
@@ -79,9 +83,22 @@ export default function DeviceList() {
   const handleDeviceSave = async (payload: Record<string, unknown>, editing: Device | null) => {
     try {
       if (editing) {
+        // N-11：先按 payload 字段快照原值，作为逆操作回填
+        const inverse: Partial<Device> = {};
+        Object.keys(payload).forEach(k => {
+          (inverse as Record<string, unknown>)[k] = (editing as unknown as Record<string, unknown>)[k];
+        });
         await tauriApi.updateDevice(editing.id, payload as Partial<Device>);
+        pushUndo({
+          label: `编辑设备「${editing.name}」`,
+          undo: async () => { await tauriApi.updateDevice(editing.id, inverse); refresh(); },
+        });
       } else {
-        await tauriApi.createDevice(payload as unknown as tauriApi.DeviceCreate);
+        const created = await tauriApi.createDevice(payload as unknown as tauriApi.DeviceCreate);
+        pushUndo({
+          label: `新建设备「${created.name}」`,
+          undo: async () => { await tauriApi.deleteDevice(created.id); refresh(); },
+        });
       }
       setDeviceModalVisible(false);
       setEditingDevice(null);
@@ -115,12 +132,16 @@ export default function DeviceList() {
         try {
           await tauriApi.deleteDevice(device.id);
           refresh();
+          pushUndo({
+            label: `删除设备「${device.name}」`,
+            undo: async () => { await tauriApi.restoreDevice(device.id); refresh(); },
+          });
         } catch (err) {
           message.error(`删除失败：${tauriApi.errorMessage(err)}`);
         }
       },
     });
-  }, [modal, message, refresh]);
+  }, [modal, message, refresh, pushUndo]);
 
   // ---------- N-20 批量删除：选区派生 ----------
   const onsiteSelectedCount = useMemo(
@@ -177,6 +198,19 @@ export default function DeviceList() {
             message.success(`已删除 ${result.deleted} 台设备`);
           }
           refresh();
+          // N-11 撤销：恢复本次成功删除的设备（跳过 not_found）
+          const deletedIds = ids.filter(id => !result.not_found.includes(id));
+          if (deletedIds.length > 0) {
+            pushUndo({
+              label: `批量删除 ${deletedIds.length} 台设备`,
+              undo: async () => {
+                for (const id of deletedIds) {
+                  await tauriApi.restoreDevice(id);
+                }
+                refresh();
+              },
+            });
+          }
         } catch (err) {
           // ⑦ 事务失败（后端整体回滚）：本地列表不变 + message.error（不 rethrow → 弹窗关闭）
           message.error(`批量删除失败：${tauriApi.errorMessage(err)}`);
@@ -185,7 +219,7 @@ export default function DeviceList() {
         }
       },
     });
-  }, [selectedRowKeys, selectedDeviceMap, modal, message, refresh]);
+  }, [selectedRowKeys, selectedDeviceMap, modal, message, refresh, pushUndo]);
 
   const rowSelection = {
     selectedRowKeys,
@@ -267,6 +301,15 @@ export default function DeviceList() {
     </Checkbox.Group>
   );
 
+  // N-12 全局快捷键（台账上下文）：Ctrl+N 新增 / Ctrl+F 聚焦搜索 / Ctrl+Z 撤销 / Delete 删除选中 / F5 刷新
+  useRegisterShortcuts({
+    onNew: () => showDeviceModal(),
+    onSearch: () => searchInputRef.current?.focus(),
+    onUndo: () => { void undo(); },
+    onDelete: () => { if (selectedRowKeys.length > 0) handleBatchDelete(); },
+    onRefresh: refresh,
+  });
+
   return (
     <div className="device-list-page">
       <div className="device-list-header">
@@ -306,6 +349,7 @@ export default function DeviceList() {
             刷新
           </Button>
           <Input
+            ref={searchInputRef}
             className="device-list-search"
             placeholder="搜索名称 / IP / 序列号 / 资产编号..."
             value={query.search ?? ''}
