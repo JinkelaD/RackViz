@@ -515,10 +515,9 @@ pub fn restore_device(conn: &Connection, id: i32) -> Result<Device, AppError> {
         .clone()
         .ok_or_else(|| AppError::validation("该设备未被删除，无需恢复"))?;
 
-    // ① 超 30 天拒绝恢复
+    // ① 超 30 天拒绝恢复（按**完整时长**判定：30 天零 1 秒即拒绝；正好 30 天放行）
     if let Some(dt) = parse_iso_utc(&deleted_at) {
-        let age_days = (Utc::now() - dt).num_days();
-        if age_days > RESTORE_WINDOW_DAYS {
+        if Utc::now().signed_duration_since(dt) > chrono::Duration::days(RESTORE_WINDOW_DAYS) {
             return Err(AppError::validation(&format!(
                 "恢复失败：设备删除已超过 {} 天，无法恢复",
                 RESTORE_WINDOW_DAYS
@@ -1118,17 +1117,23 @@ mod tests {
         assert_eq!(total, 3, "total 应与 items 同 WHERE，不受 LIMIT 影响");
     }
 
-    /// 点 3①：恢复窗口边界 —— 正好 30 天（含）内可恢复；31 天拒绝。
+    /// 点 3①：恢复窗口边界 —— 窗口内（30 天减 5 秒）应可恢复；31 天拒绝。
+    ///
+    /// 注：秒级时间戳下「正好 30 天」**不可构造** —— `%Y-%m-%dT%H:%M:%SZ` 向下截断会使存量值
+    /// 比「30 天前」更早，叠加 `restore_device` 内取的更晚 `now`，`age` 必然 > 30 天。
+    /// 故 allowed 侧用**明确落在窗口内**的「30 天减 5 秒」代表（5 秒余量足以覆盖截断 ≤1 秒
+    /// 与测试执行间隔）；拒绝侧由 `test_restore_boundary_just_over_30_days_should_reject`
+    /// 与 `test_restore_boundary_31_days_rejected` 覆盖。
     #[test]
-    fn test_restore_boundary_exactly_30_days_allowed() {
+    fn test_restore_boundary_within_30_days_allowed() {
         let conn = setup_db();
-        let dev = create_test_device(&conn, "Exact30", None);
+        let dev = create_test_device(&conn, "Within30", None);
         soft_delete_device(&conn, dev.id).unwrap();
-        let past = (chrono::Utc::now() - chrono::Duration::days(30))
+        let past = (chrono::Utc::now() - chrono::Duration::days(30) + chrono::Duration::seconds(5))
             .format("%Y-%m-%dT%H:%M:%SZ")
             .to_string();
         conn.execute("UPDATE devices SET deleted_at = ?1 WHERE id = ?2", params![past, dev.id]).unwrap();
-        let restored = restore_device(&conn, dev.id).expect("正好 30 天仍在窗口内，应可恢复");
+        let restored = restore_device(&conn, dev.id).expect("30 天减 5 秒仍在窗口内，应可恢复");
         assert!(restored.deleted_at.is_none());
     }
 
@@ -1144,15 +1149,13 @@ mod tests {
         assert!(restore_device(&conn, dev.id).is_err(), "超过 30 天必须拒绝恢复");
     }
 
-    /// 点 3①（边界存疑）：删除时间 = 30 天 + 1 小时（严格超出 30 天窗口应拒绝）。
+    /// 点 3①（边界）：删除时间 = 30 天 + 1 小时 → 严格超出 30 天窗口，必须拒绝。
     ///
-    /// 设计口径为「超过 30 天拒绝恢复」（§4.3 / §9 Q6）。当前实现以
-    /// `(Utc::now() - deleted_at).num_days() > 30` 比较，而 `num_days()` 对
-    /// Duration 向下取整加秒数，故「30 天零 1 小时」仍被算作 30 天 → 会被放行。
-    /// 本用例断言**设计意图**（应拒绝）；默认 `#[ignore]`，用
-    /// `cargo test -- --ignored` 单独跑可复现该偏差。
+    /// 设计口径为「超过 30 天拒绝恢复」（§4.3 / §9 Q6）。`restore_device` 已改为
+    /// 按**完整时长**判定：`Utc::now().signed_duration_since(deleted_at) >
+    /// chrono::Duration::days(30)`。因此「30 天零 1 秒」即拒绝，而**正好 30 天**放行
+    /// （见 `test_restore_boundary_exactly_30_days_allowed`）。
     #[test]
-    #[ignore = "边界偏差：num_days() 取整使 30d+1h 仍可恢复，待裁决（见 QA 报告）"]
     fn test_restore_boundary_just_over_30_days_should_reject() {
         let conn = setup_db();
         let dev = create_test_device(&conn, "OverByHour", None);
