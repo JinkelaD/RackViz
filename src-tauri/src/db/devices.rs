@@ -412,18 +412,19 @@ pub fn find_device_by_asset(conn: &Connection, asset_no: &str) -> Result<Option<
 }
 
 pub fn find_device_by_name_in_rack(conn: &Connection, name: &str, rack_id: Option<i32>) -> Result<Option<Device>, AppError> {
+    // 读路径默认排除软删记录（§8-13 / 团队裁决 #8）；仅用于导入查重，不得命中回收站内设备。
     match rack_id {
         Some(rid) => {
             let mut stmt = conn.prepare(&format!(
-                "{} WHERE name = ?1 AND rack_id = ?2",
-                DEVICE_SELECT
+                "{} WHERE name = ?1 AND rack_id = ?2 AND {}",
+                DEVICE_SELECT, NOT_DELETED
             ))?;
             Ok(stmt.query_row(params![name, rid], row_to_device).optional()?)
         }
         None => {
             let mut stmt = conn.prepare(&format!(
-                "{} WHERE name = ?1 AND rack_id IS NULL",
-                DEVICE_SELECT
+                "{} WHERE name = ?1 AND rack_id IS NULL AND {}",
+                DEVICE_SELECT, NOT_DELETED
             ))?;
             Ok(stmt.query_row(params![name], row_to_device).optional()?)
         }

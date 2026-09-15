@@ -153,6 +153,16 @@ fn find_rack_id_by_name(conn: &Connection, name: &str) -> Result<Option<i32>, Ap
         .map_err(Into::into)
 }
 
+/// 导入关联机房（N-05）：仅当机柜当前**未归属任何机房**（`room_id IS NULL`）时将其
+/// 关联到给定机房，避免覆盖用户在机柜管理中的手工归属；已归属则保持原样（幂等、非破坏）。
+pub fn link_rack_room(conn: &Connection, rack_id: i32, room_id: i32) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE racks SET room_id = ?1, updated_at = ?2 WHERE id = ?3 AND room_id IS NULL",
+        params![room_id, now_iso(), rack_id],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

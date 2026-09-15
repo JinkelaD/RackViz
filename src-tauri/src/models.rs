@@ -244,6 +244,21 @@ pub struct ImportResult {
     pub errors: Vec<String>,
 }
 
+/// Excel 导入进度事件负载（N-06）。
+///
+/// 由 `import_devices_excel` 在 blocking 任务中经 `AppHandle::emit("import://progress", ..)`
+/// 推送；前端 `useImportProgress` 消费。字段一律 snake_case（§8-15 N-A 裁决）。
+/// `phase` 取值：`"parsing"`（解析文件） | `"importing"`（写入数据） | `"done"`（完成）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ImportProgress {
+    /// 已处理的数据行数
+    pub processed: u32,
+    /// 总数据行数（解析阶段为 0，进入导入阶段后为行数估计）
+    pub total: u32,
+    /// 当前阶段（parsing | importing | done）
+    pub phase: String,
+}
+
 /// 设备分页查询参数（N-01/N-02）。
 ///
 /// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**（字段名本身即为 snake_case）。
@@ -283,7 +298,6 @@ pub struct DevicePage {
 /// Excel 导入选项（N-04/N-05）。
 ///
 /// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**。
-#[allow(dead_code)] // 由 T2.5（excel 导入选项）消费
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ImportOptions {
     /// 已存在记录的更新模式：`"skip"`（跳过） | `"overwrite"`（覆盖）
@@ -321,7 +335,6 @@ pub struct RestoreResult {
 ///
 /// 返回 8 选 1 的静态字符串，与前端 `constants/labels.ts` 的 `DEVICE_TYPES` 一一对应
 /// （§8-14 双源同步）。映射表见架构设计 §3.3。
-#[allow(dead_code)] // 由 T2.8（excel 导入类型关联）消费
 pub fn normalize_device_type(raw: &str) -> &'static str {
     // 归一化：trim → 小写 → 去除所有空白 / '_' / '-'
     let key: String = raw

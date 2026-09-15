@@ -1,7 +1,7 @@
 use tauri::State;
 use crate::state::DbState;
 use crate::error::AppError;
-use crate::models::ImportResult;
+use crate::models::{ImportOptions, ImportResult};
 use tauri_plugin_dialog::DialogExt;
 use std::path::PathBuf;
 
@@ -147,18 +147,23 @@ pub async fn export_report_html(
 
 #[tauri::command]
 pub async fn import_excel_from_path(
+    app: tauri::AppHandle,
     state: State<'_, DbState>,
     path: String,
+    options: ImportOptions,
 ) -> Result<ImportResult, AppError> {
-    log::info!("[操作] 开始导入Excel: {:?}", path);
+    log::info!("[操作] 开始导入Excel: {:?}, 模式={}, 关联机房={}", path, options.update_mode, options.link_room);
     let pool = state.pool.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<ImportResult, AppError> {
         let conn = pool.get()?;
-        crate::excel::import_devices_excel(&conn, &path)
+        crate::excel::import_devices_excel(&conn, &app, &path, &options)
     })
     .await
     .map_err(|e| AppError::io(&format!("导入任务异常: {}", e)))??;
-    log::info!("[操作] 导入Excel完成: 成功{}条, 跳过重复{}条, 错误{}条",
-        result.imported, result.skipped, result.errors.len());
+    log::info!(
+        "[操作] 导入Excel完成: 新增{}条, 更新{}条, 跳过{}条, 新建型号{}个, 告警{}条, 错误{}条",
+        result.imported, result.updated, result.skipped, result.models_created,
+        result.warnings.len(), result.errors.len()
+    );
     Ok(result)
 }

@@ -138,6 +138,31 @@ fn find_model_id_by_name(conn: &Connection, name: &str) -> Result<Option<i32>, A
         .map_err(Into::into)
 }
 
+/// 按名称查询完整型号（N-21）：供 Excel 导入时判断「同名型号已存在则复用且不覆盖 type」，
+/// 并据既有 `type` 生成告警文案（"型号「X」已存在，类型保持为 Y"）。
+pub fn get_device_model_by_name(conn: &Connection, name: &str) -> Result<Option<DeviceModel>, AppError> {
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT id, name, manufacturer, type, height_u, power_watt, created_at, updated_at \
+         FROM device_models WHERE name = ?1",
+        params![name],
+        |row| {
+            Ok(DeviceModel {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                manufacturer: row.get(2)?,
+                device_type: row.get(3)?,
+                height_u: row.get(4)?,
+                power_watt: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
