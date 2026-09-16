@@ -589,7 +589,7 @@ pub fn import_devices_excel(
             }
 
             processed += 1;
-            if processed % PROGRESS_EVERY == 0 {
+            if processed.is_multiple_of(PROGRESS_EVERY) {
                 on_progress(processed, total, "importing");
             }
         }

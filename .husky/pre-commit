@@ -4,7 +4,7 @@
 # 或安装 husky：npm i -D husky && npx husky install
 echo "🔍 运行 RackViz 预提交检查..."
 
-ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+ROOT_DIR="$(git rev-parse --show-toplevel)"
 
 # Rust 检查
 cd "$ROOT_DIR/src-tauri" || exit 1

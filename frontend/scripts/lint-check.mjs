@@ -9,8 +9,10 @@
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('../src', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+// fileURLToPath 正确处理 Windows 盘符与路径中的空格（URL.pathname 会保留 %20 编码）
+const ROOT = fileURLToPath(new URL('../src', import.meta.url));
 const EXTS = new Set(['.ts', '.tsx']);
 
 // 允许的非空断言例外（白名单可逐步收紧）
@@ -26,6 +28,8 @@ const AS_WHITELIST = [
   /as DeviceListContext/, // 保留类型引用
   /\} as T :/, // useApiList 乐观更新合并（函数式 setState 内收窄）
   /App as AntdApp/, // antd 命名导入别名，非断言
+  /as unknown as Record<string, unknown>/, // 撤销栈深拷贝收窄 ×3（useRackView:210/427、DeviceList:89）——待重构为类型守卫
+  /as DeviceSortField \| undefined/, // AntD Table sorter 回调参数收窄（DeviceList:246）——待重构
 ];
 
 function walk(dir, out = []) {
