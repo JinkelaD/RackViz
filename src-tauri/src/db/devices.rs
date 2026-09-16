@@ -244,7 +244,180 @@ fn parse_optional_date(s: &Option<String>) -> Option<NaiveDate> {
     })
 }
 
+// ============================================================================
+// N-10 输入验证增强（2026-09-16）：后端为最终防线，覆盖表单 / Excel 导入 / 拖拽全部写入路径
+//
+// 规则与前端 `DeviceFormModal.tsx` 对齐（前后端双校验）：
+// - U 位区间：end ≥ start，且任意 U 位 ≥ 1
+// - U 位边界：双边齐全时须落在所属机柜 height_u 内
+// - U 位重叠：同机柜 active 设备区间互斥（排除自身；软删设备不参与——v5 回收站语义）
+// - IP 列表：分隔符 `, ， ; ； 空白`，每项为无前导零 IPv4 或含 `:`（放行 IPv6）；允许空
+// - status：枚举白名单（与前端 DEVICE_STATUSES / 导入归一化一致）
+// ============================================================================
+
+/// 设备状态枚举白名单
+const DEVICE_STATUS_VALUES: [&str; 3] = ["online", "offline", "unconfigured"];
+
+/// U 位区间校验：双边给出时 end ≥ start；任一给出时值 ≥ 1（单边给值不拒绝，兼容既有语义）
+fn validate_u_range(start_u: Option<i32>, end_u: Option<i32>) -> Result<(), AppError> {
+    for v in [start_u, end_u].into_iter().flatten() {
+        if v < 1 {
+            return Err(AppError::validation(&format!("U 位({v})无效：U 位从 1 开始")));
+        }
+    }
+    if let (Some(s), Some(e)) = (start_u, end_u) {
+        if e < s {
+            return Err(AppError::validation(&format!(
+                "结束U位({e})不能小于起始U位({s})"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// U 位边界校验：双边齐全且有机柜时，须落在机柜高度内（顺带验证机柜存在性）
+fn validate_u_boundary(
+    conn: &Connection,
+    rack_id: Option<i32>,
+    start_u: Option<i32>,
+    end_u: Option<i32>,
+) -> Result<(), AppError> {
+    let (Some(rid), Some(_s), Some(e)) = (rack_id, start_u, end_u) else {
+        return Ok(());
+    };
+    let row: Option<(String, i32)> = conn
+        .query_row(
+            "SELECT name, height_u FROM racks WHERE id = ?1",
+            params![rid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((name, height)) = row else {
+        return Err(AppError::validation(&format!(
+            "所属机柜不存在（id={rid}），无法安置 U 位"
+        )));
+    };
+    if e > height {
+        return Err(AppError::validation(&format!(
+            "结束U位({e})超出机柜「{name}」高度({height}U)"
+        )));
+    }
+    Ok(())
+}
+
+/// U 位重叠校验：同机柜内与任一其它 active 设备的 U 位区间相交即冲突（排除自身 / 软删）。
+/// `exclude_id = None` 用于新增场景。
+fn validate_u_overlap(
+    conn: &Connection,
+    exclude_id: Option<i32>,
+    rack_id: Option<i32>,
+    start_u: Option<i32>,
+    end_u: Option<i32>,
+) -> Result<(), AppError> {
+    let (Some(rid), Some(s), Some(e)) = (rack_id, start_u, end_u) else {
+        return Ok(());
+    };
+    // exclude_id 用 -1（不存在的 id）表示"不排除"，避免动态 SQL 拼参
+    let exclude = exclude_id.unwrap_or(-1);
+    let hit: Option<(String, i32, i32)> = conn
+        .query_row(
+            "SELECT name, start_u, end_u FROM devices \
+             WHERE rack_id = ?1 AND deleted_at IS NULL \
+             AND start_u IS NOT NULL AND end_u IS NOT NULL \
+             AND start_u <= ?2 AND ?3 <= end_u AND id != ?4 \
+             ORDER BY id LIMIT 1",
+            params![rid, e, s, exclude],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    if let Some((name, s2, e2)) = hit {
+        return Err(AppError::conflict(&format!(
+            "U 位 {s}-{e} 与设备「{name}」(U{s2}-{e2}) 重叠，请更换位置"
+        )));
+    }
+    Ok(())
+}
+
+/// 无前导零 IPv4：与前端 `IPV4_RE`（`25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d`）等价——
+/// 4 段、每段 1~3 位纯数字、无前导零、数值 ≤ 255。
+fn is_valid_ipv4(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    parts.len() == 4
+        && parts.iter().all(|p| {
+            !p.is_empty()
+                && p.len() <= 3
+                && p.bytes().all(|b| b.is_ascii_digit())
+                && !(p.len() > 1 && p.starts_with('0'))
+                && p.parse::<u16>().map(|v| v <= 255).unwrap_or(false)
+        })
+}
+
+/// IP 列表校验：与前端 `isValidIpList` 同一规则——
+/// 分隔符为 `, ， ; ；` 及空白（覆盖前端 `\s` 的常见形态）；空 / 全空白放行；
+/// 每项为 IPv4 或含 `:`（IPv6 放行，与前端一致从宽）。
+fn validate_ip_addresses(raw: &str) -> Result<(), AppError> {
+    let parts: Vec<&str> = raw
+        .split([',', '，', ';', '；', ' ', '\t', '\r', '\n'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.is_empty() {
+        return Ok(());
+    }
+    for p in parts {
+        if !(is_valid_ipv4(p) || p.contains(':')) {
+            return Err(AppError::validation(&format!(
+                "IP 地址格式不正确：{p}（多个 IP 用逗号分隔）"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// status 枚举校验（白名单；空串同样拒绝，不允许静默写脏）
+fn validate_status(status: &str) -> Result<(), AppError> {
+    if DEVICE_STATUS_VALUES.contains(&status) {
+        Ok(())
+    } else {
+        Err(AppError::validation(&format!(
+            "设备状态取值非法：{status:?}（须为 online / offline / unconfigured）"
+        )))
+    }
+}
+
+/// 设备写入校验统一入口（insert / update 共用）。
+/// `exclude_id`：update 场景传设备自身 id 以排除重叠自查；insert 传 None。
+pub fn validate_device_input(
+    conn: &Connection,
+    exclude_id: Option<i32>,
+    rack_id: Option<i32>,
+    start_u: Option<i32>,
+    end_u: Option<i32>,
+    ip_addresses: Option<&str>,
+    status: &str,
+) -> Result<(), AppError> {
+    validate_u_range(start_u, end_u)?;
+    validate_u_boundary(conn, rack_id, start_u, end_u)?;
+    validate_u_overlap(conn, exclude_id, rack_id, start_u, end_u)?;
+    if let Some(ip) = ip_addresses {
+        validate_ip_addresses(ip)?;
+    }
+    validate_status(status)?;
+    Ok(())
+}
+
 pub fn insert_device(conn: &Connection, data: &DeviceCreate) -> Result<Device, AppError> {
+    let status = data.status.as_deref().unwrap_or("unconfigured");
+    // N-10：写入前校验（表单 / 导入 / 拖拽共用此函数，此处为最终防线）
+    validate_device_input(
+        conn,
+        None,
+        data.rack_id,
+        data.start_u,
+        data.end_u,
+        data.ip_addresses.as_deref(),
+        status,
+    )?;
     let purchase_date = parse_optional_date(&data.purchase_date);
     let warranty_expire = parse_optional_date(&data.warranty_expire);
     let height_u = resolve_device_height(conn, data.height_u, data.start_u, data.end_u, data.device_model_id)?;
@@ -271,7 +444,7 @@ pub fn insert_device(conn: &Connection, data: &DeviceCreate) -> Result<Device, A
             data.function.as_deref().unwrap_or(""),
             purchase_date,
             warranty_expire,
-            data.status.as_deref().unwrap_or("unconfigured"),
+            status,
             data.power_watt.unwrap_or(0),
             height_u,
             now.as_str(),
@@ -306,6 +479,41 @@ pub fn update_device(conn: &Connection, id: i32, data: &DeviceUpdate) -> Result<
     patch_assign!(assignments, params, "status", &data.status);
     patch_assign!(assignments, params, "power_watt", &data.power_watt);
 
+    // N-10：字段级校验——仅对显式 Set 的新值校验（Unset 保留旧值当初已验；Clear 置 NULL 合法）
+    if let Patch::Set(ip) = &data.ip_addresses {
+        validate_ip_addresses(ip)?;
+    }
+    if let Patch::Set(st) = &data.status {
+        validate_status(st)?;
+    }
+
+    // 合并 Patch 三态得更新后实际 U 位三要素（供 height 同步与 N-10 空间校验共用）
+    let eff_rack = match data.rack_id {
+        Patch::Set(v) => Some(v),
+        Patch::Clear => None,
+        Patch::Unset => cur.rack_id,
+    };
+    let eff_start = match data.start_u {
+        Patch::Set(v) => Some(v),
+        Patch::Clear => None,
+        Patch::Unset => cur.start_u,
+    };
+    let eff_end = match data.end_u {
+        Patch::Set(v) => Some(v),
+        Patch::Clear => None,
+        Patch::Unset => cur.end_u,
+    };
+    // 空间校验（区间/边界/重叠）仅在 U 位三要素任一实际变更时执行：
+    // 历史脏数据的非空间编辑（如改名）不受阻，动 U 位时才要求解决冲突
+    if !matches!(data.rack_id, Patch::Unset)
+        || !matches!(data.start_u, Patch::Unset)
+        || !matches!(data.end_u, Patch::Unset)
+    {
+        validate_u_range(eff_start, eff_end)?;
+        validate_u_boundary(conn, eff_rack, eff_start, eff_end)?;
+        validate_u_overlap(conn, Some(id), eff_rack, eff_start, eff_end)?;
+    }
+
     // 日期字段：值转 NaiveDate 存储；Clear 或空串 → NULL
     push_date_assignment(&mut assignments, &mut params, "purchase_date", &data.purchase_date)?;
     push_date_assignment(&mut assignments, &mut params, "warranty_expire", &data.warranty_expire)?;
@@ -326,17 +534,8 @@ pub fn update_device(conn: &Connection, id: i32, data: &DeviceUpdate) -> Result<
             params.push(Box::new(*v));
         }
         Patch::Unset => {
-            // 结合既有行计算更新后的实际 U 位
-            let eff_start = match &data.start_u {
-                Patch::Set(v) => Some(*v),
-                Patch::Clear => None,
-                Patch::Unset => cur.start_u,
-            };
-            let eff_end = match &data.end_u {
-                Patch::Set(v) => Some(*v),
-                Patch::Clear => None,
-                Patch::Unset => cur.end_u,
-            };
+            // 复用上方合并所得 eff_start/eff_end：更新后落在有效 U 位区间时
+            // 自动同步为区间高度（重上架/换位置时保证高度不丢）；否则保持原值（下架保留高度）
             if let (Some(s), Some(e)) = (eff_start, eff_end) {
                 if e >= s && e - s + 1 != cur.height_u {
                     assignments.push(format!("height_u = ?{}", params.len() + 1));
@@ -819,17 +1018,27 @@ mod tests {
     fn test_query_devices_multi_field_search() {
         let conn = setup_db();
         insert_device(&conn, &DeviceCreate { name: "TOK-Name".into(), ..Default::default() }).unwrap();
-        insert_device(&conn, &DeviceCreate { name: "B".into(), ip_addresses: Some("TOK-ip".into()), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "B".into(), ip_addresses: Some("10.99.0.1".into()), ..Default::default() }).unwrap();
         insert_device(&conn, &DeviceCreate { name: "C".into(), serial_no: Some("TOK-SN".into()), ..Default::default() }).unwrap();
         insert_device(&conn, &DeviceCreate { name: "D".into(), asset_no: Some("TOK-AS".into()), ..Default::default() }).unwrap();
         insert_device(&conn, &DeviceCreate { name: "Nope".into(), ..Default::default() }).unwrap();
 
+        // name / serial_no / asset_no 三字段命中（N-10 后 IP 需为合法格式，IP 命中单独断言）
         let (items, total) = query_devices(&conn, &DeviceQuery {
             search: Some("TOK".into()),
             ..Default::default()
         }).unwrap();
-        assert_eq!(total, 4);
-        assert_eq!(items.len(), 4);
+        assert_eq!(total, 3);
+        assert_eq!(items.len(), 3);
+
+        // ip_addresses 字段命中
+        let (items_ip, total_ip) = query_devices(&conn, &DeviceQuery {
+            search: Some("10.99".into()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(total_ip, 1);
+        assert_eq!(items_ip.len(), 1);
+        assert_eq!(items_ip[0].name, "B");
     }
 
     #[test]
@@ -1256,5 +1465,252 @@ mod tests {
             list_deleted_devices(&conn, None).unwrap().is_empty(),
             "回滚后回收站必须为空（不得留下部分删除）"
         );
+    }
+
+    // ===================== N-10 输入验证 =====================
+
+    /// 建 10U 机柜并返回其 id
+    fn create_test_rack_10u(conn: &Connection, name: &str) -> i32 {
+        crate::db::racks::insert_rack(conn, &crate::models::RackCreate {
+            name: name.into(),
+            height_u: Some(10),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+    }
+
+    fn assert_validation(err: AppError, hint: &str) {
+        assert!(
+            err.message.contains(hint),
+            "错误消息应含「{hint}」，实际：{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn test_n10_u_range_rejected() {
+        let conn = setup_db();
+        // start > end
+        let err = insert_device(&conn, &DeviceCreate {
+            name: "Bad-Range".into(),
+            start_u: Some(5),
+            end_u: Some(3),
+            ..Default::default()
+        }).unwrap_err();
+        assert_validation(err, "结束U位(3)不能小于起始U位(5)");
+        // U 位 < 1
+        let err = insert_device(&conn, &DeviceCreate {
+            name: "Bad-Zero".into(),
+            start_u: Some(0),
+            end_u: Some(2),
+            ..Default::default()
+        }).unwrap_err();
+        assert_validation(err, "U 位(0)无效");
+        // update 路径同样拦截
+        let dev = insert_device(&conn, &DeviceCreate { name: "OK".into(), ..Default::default() }).unwrap();
+        let err = update_device(&conn, dev.id, &DeviceUpdate {
+            start_u: Patch::Set(9),
+            end_u: Patch::Set(4),
+            ..Default::default()
+        }).unwrap_err();
+        assert_validation(err, "结束U位(4)不能小于起始U位(9)");
+    }
+
+    #[test]
+    fn test_n10_u_boundary_rejected() {
+        let conn = setup_db();
+        let rid = create_test_rack_10u(&conn, "R42");
+        // end 超出机柜高度
+        let err = insert_device(&conn, &DeviceCreate {
+            name: "Too-Tall".into(),
+            rack_id: Some(rid),
+            start_u: Some(9),
+            end_u: Some(11),
+            ..Default::default()
+        }).unwrap_err();
+        assert_validation(err, "超出机柜「R42」高度(10U)");
+        // 边界内合法
+        insert_device(&conn, &DeviceCreate {
+            name: "Edge-OK".into(),
+            rack_id: Some(rid),
+            start_u: Some(9),
+            end_u: Some(10),
+            ..Default::default()
+        }).unwrap();
+    }
+
+    #[test]
+    fn test_n10_u_overlap_insert_rejected() {
+        let conn = setup_db();
+        let rid = create_test_rack_10u(&conn, "R10");
+        insert_device(&conn, &DeviceCreate {
+            name: "A".into(), rack_id: Some(rid),
+            start_u: Some(1), end_u: Some(4), ..Default::default()
+        }).unwrap();
+        // 与 A(1-4) 相交：区间包含/部分重叠均拒绝
+        for (s, e) in [(3, 6), (4, 4), (1, 10)] {
+            let err = insert_device(&conn, &DeviceCreate {
+                name: format!("B-{s}-{e}"),
+                rack_id: Some(rid),
+                start_u: Some(s),
+                end_u: Some(e),
+                ..Default::default()
+            }).unwrap_err();
+            assert_validation(err, "重叠");
+        }
+        // 相邻（5-8 紧接 1-4）合法
+        insert_device(&conn, &DeviceCreate {
+            name: "Adjacent".into(), rack_id: Some(rid),
+            start_u: Some(5), end_u: Some(8), ..Default::default()
+        }).unwrap();
+        // 不同机柜同 U 位合法
+        let rid2 = create_test_rack_10u(&conn, "R10-B");
+        insert_device(&conn, &DeviceCreate {
+            name: "OtherRack".into(), rack_id: Some(rid2),
+            start_u: Some(1), end_u: Some(4), ..Default::default()
+        }).unwrap();
+    }
+
+    #[test]
+    fn test_n10_u_overlap_update_excludes_self() {
+        let conn = setup_db();
+        let rid = create_test_rack_10u(&conn, "R10");
+        let a = insert_device(&conn, &DeviceCreate {
+            name: "A".into(), rack_id: Some(rid),
+            start_u: Some(1), end_u: Some(4), ..Default::default()
+        }).unwrap();
+        // 自身移动（新区间与旧区间相交）不构成自重叠 → 成功
+        let moved = update_device(&conn, a.id, &DeviceUpdate {
+            start_u: Patch::Set(2),
+            end_u: Patch::Set(5),
+            ..Default::default()
+        }).unwrap().unwrap();
+        assert_eq!((moved.start_u, moved.end_u), (Some(2), Some(5)));
+        // 高度自动同步为区间高度
+        assert_eq!(moved.height_u, 4);
+        // 再移到与"其它设备"重叠处 → conflict（移 end 到 7：eff 2-7 与 B(7-8) 相交）
+        insert_device(&conn, &DeviceCreate {
+            name: "B".into(), rack_id: Some(rid),
+            start_u: Some(7), end_u: Some(8), ..Default::default()
+        }).unwrap();
+        let err = update_device(&conn, a.id, &DeviceUpdate {
+            end_u: Patch::Set(7),
+            ..Default::default()
+        }).unwrap_err();
+        assert!(err.message.contains("重叠"), "应报重叠，实际：{}", err.message);
+    }
+
+    #[test]
+    fn test_n10_u_overlap_soft_deleted_ignored() {
+        let conn = setup_db();
+        let rid = create_test_rack_10u(&conn, "R10");
+        let a = insert_device(&conn, &DeviceCreate {
+            name: "A".into(), rack_id: Some(rid),
+            start_u: Some(1), end_u: Some(4), ..Default::default()
+        }).unwrap();
+        delete_device(&conn, a.id).unwrap();
+        // A 软删后其 U 位可复用（v5 回收站语义：软删退出占用）
+        insert_device(&conn, &DeviceCreate {
+            name: "Reuse".into(), rack_id: Some(rid),
+            start_u: Some(1), end_u: Some(4), ..Default::default()
+        }).unwrap();
+    }
+
+    #[test]
+    fn test_n10_update_non_space_fields_not_blocked_by_legacy_overlap() {
+        // 历史脏数据（直接 SQL 造重叠）编辑名称/状态等非空间字段不受阻；
+        // 只有动 U 位时才要求解决冲突
+        let conn = setup_db();
+        let rid = create_test_rack_10u(&conn, "R10");
+        insert_device(&conn, &DeviceCreate {
+            name: "A".into(), rack_id: Some(rid),
+            start_u: Some(1), end_u: Some(4), ..Default::default()
+        }).unwrap();
+        // 直接 SQL 构造历史脏数据（绕过 N-10 校验，模拟校验上线前的存量重叠）
+        conn.execute(
+            "INSERT INTO devices (name, rack_id, start_u, end_u) VALUES ('B', ?1, 2, 3)",
+            params![rid],
+        ).unwrap();
+        let b_id: i32 = conn.last_insert_rowid() as i32;
+        // 非空间编辑 → 成功
+        let renamed = update_device(&conn, b_id, &DeviceUpdate {
+            name: Patch::Set("B-Renamed".into()),
+            status: Patch::Set("online".into()),
+            ..Default::default()
+        }).unwrap().unwrap();
+        assert_eq!(renamed.name, "B-Renamed");
+        // 动 U 位 → 被 overlap 拦截
+        let err = update_device(&conn, b_id, &DeviceUpdate {
+            end_u: Patch::Set(5),
+            ..Default::default()
+        }).unwrap_err();
+        assert!(err.message.contains("重叠"), "应报重叠，实际：{}", err.message);
+    }
+
+    #[test]
+    fn test_n10_ip_addresses() {
+        let conn = setup_db();
+        // 合法：IPv4 / 多 IP 混合分隔符 / IPv6 / 空白串
+        for ip in ["10.0.0.1", "10.0.0.1,10.0.0.2", "10.0.0.1； 192.168.1.1", "::1", "2001:db8::1", "   "] {
+            insert_device(&conn, &DeviceCreate {
+                name: format!("IP-OK-{ip}"),
+                ip_addresses: Some(ip.into()),
+                ..Default::default()
+            }).unwrap();
+        }
+        // 非法：越界段 / 非数字 / 前导零 / 段数不对
+        for ip in ["256.1.1.1", "1.2.3.4.5", "abc.def.ghi.jkl", "01.2.3.4", "1.2.3"] {
+            let err = insert_device(&conn, &DeviceCreate {
+                name: format!("IP-Bad-{ip}"),
+                ip_addresses: Some(ip.into()),
+                ..Default::default()
+            }).unwrap_err();
+            assert_validation(err, "IP 地址格式不正确");
+        }
+        // update：Set 新值校验；Clear（置 NULL）放行
+        let dev = insert_device(&conn, &DeviceCreate {
+            name: "Upd".into(),
+            ip_addresses: Some("10.0.0.9".into()),
+            ..Default::default()
+        }).unwrap();
+        let err = update_device(&conn, dev.id, &DeviceUpdate {
+            ip_addresses: Patch::Set("999.0.0.1".into()),
+            ..Default::default()
+        }).unwrap_err();
+        assert_validation(err, "IP 地址格式不正确");
+        update_device(&conn, dev.id, &DeviceUpdate {
+            ip_addresses: Patch::Clear,
+            ..Default::default()
+        }).unwrap().unwrap();
+    }
+
+    #[test]
+    fn test_n10_status_enum() {
+        let conn = setup_db();
+        // 合法：白名单三值（None → 默认 unconfigured）
+        for st in ["online", "offline", "unconfigured"] {
+            insert_device(&conn, &DeviceCreate {
+                name: format!("ST-{st}"),
+                status: Some(st.into()),
+                ..Default::default()
+            }).unwrap();
+        }
+        // 非法：未知值 / 空串
+        for st in ["running", ""] {
+            let err = insert_device(&conn, &DeviceCreate {
+                name: format!("ST-Bad-{st}"),
+                status: Some(st.into()),
+                ..Default::default()
+            }).unwrap_err();
+            assert_validation(err, "设备状态取值非法");
+        }
+        // update：Set 非法值拦截
+        let dev = insert_device(&conn, &DeviceCreate { name: "Upd-ST".into(), ..Default::default() }).unwrap();
+        let err = update_device(&conn, dev.id, &DeviceUpdate {
+            status: Patch::Set("maintenance".into()),
+            ..Default::default()
+        }).unwrap_err();
+        assert_validation(err, "设备状态取值非法");
     }
 }

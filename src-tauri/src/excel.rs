@@ -535,6 +535,18 @@ pub fn import_devices_excel(
                 None
             };
 
+            // N-10 导入预检：U 位列非空但解析失败 → 跳过该行并警告
+            //（parse_u_range 对非法串返回 None，否则会静默变成"无 U 位"入库）
+            if !u_str.is_empty() && parse_u_range(&u_str).is_none() {
+                warnings.push(format!("第{row_no}行 [{name}] U 位「{u_str}」格式无效，已跳过（示例：5 或 5-8）"));
+                skipped += 1;
+                processed += 1;
+                if processed.is_multiple_of(PROGRESS_EVERY) {
+                    on_progress(processed, total, "importing");
+                }
+                continue;
+            }
+
             // ===== 重复检测（均自动排除软删） =====
             let mut existing = None;
             if !serial_no.is_empty() {
@@ -556,8 +568,15 @@ pub fn import_devices_excel(
                         &ip_addresses, &serial_no, &asset_no, &department, &owner, &function_desc,
                         &purchase_date_str, &warranty_expire_str, &status, power_watt,
                     );
-                    db::devices::update_device(c, existing.id, &upd)?;
-                    updated += 1;
+                    // N-10：校验/冲突拒绝 → 跳过该行并警告（主理人拍板：导入容错，不整批失败）
+                    match db::devices::update_device(c, existing.id, &upd) {
+                        Ok(_) => updated += 1,
+                        Err(e) if e.is_rejectable() => {
+                            warnings.push(format!("第{row_no}行 [{name}] 更新失败：{}，已跳过", e.message));
+                            skipped += 1;
+                        }
+                        Err(e) => return Err(e),
+                    }
                 } else {
                     log::warn!("导入跳过第{}行: 记录已存在（id={}）", row_no, existing.id);
                     skipped += 1;
@@ -566,7 +585,7 @@ pub fn import_devices_excel(
                 link_rack_room(c, rack_id, &room_name, options.link_room)?;
                 let model_id = resolve_model(c, &model_name, device_type, &mut models_created, &mut warnings)?;
                 let data = DeviceCreate {
-                    name,
+                    name: name.clone(),
                     device_model_id: model_id,
                     rack_id,
                     start_u,
@@ -584,8 +603,15 @@ pub fn import_devices_excel(
                     // 高度由 insert_device 推导：U 位区间优先，其次型号高度（None 不显式指定）
                     height_u: None,
                 };
-                db::devices::insert_device(c, &data)?;
-                imported += 1;
+                    // N-10：校验/冲突拒绝 → 跳过该行并警告（同上，导入容错策略）
+                    match db::devices::insert_device(c, &data) {
+                        Ok(_) => imported += 1,
+                        Err(e) if e.is_rejectable() => {
+                            warnings.push(format!("第{row_no}行 [{name}] 导入失败：{}，已跳过", e.message));
+                            skipped += 1;
+                        }
+                        Err(e) => return Err(e),
+                    }
             }
 
             processed += 1;
@@ -684,6 +710,34 @@ mod tests {
     }
 
     fn noop_progress(_p: u32, _t: u32, _phase: &str) {}
+
+    /// N-10：导入遇非法行（U 位格式错 / 区间倒置 / 非法 IP）→ 跳过 + 警告，合法行正常入库。
+    /// 状态列经导入侧归一化恒为合法枚举，故不设状态非法场景。
+    #[test]
+    fn test_import_n10_rejectable_rows_skipped_with_warnings() {
+        let conn = setup_db();
+        let path = temp_xlsx_path("n10skip");
+        let rows = vec![
+            header16(),
+            make_row("OK-A", "ModelA", "", "", "1-4", "10.0.0.1", "SN-A", "AS-A", "", "", "", "", "", "开机", "500", None),
+            make_row("Bad-UFormat", "ModelA", "", "", "abc", "10.0.0.2", "SN-B", "AS-B", "", "", "", "", "", "开机", "500", None),
+            make_row("Bad-URange", "ModelA", "", "", "8-3", "10.0.0.3", "SN-C", "AS-C", "", "", "", "", "", "开机", "500", None),
+            make_row("Bad-IP", "ModelA", "", "", "5", "999.1.1.1", "SN-D", "AS-D", "", "", "", "", "", "开机", "500", None),
+        ];
+        write_rows(&path, &rows);
+
+        let res = import_devices_excel(&conn, path.to_str().unwrap(), &default_opts(), &noop_progress).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(res.imported, 1, "仅合法行 OK-A 入库");
+        assert_eq!(res.skipped, 3, "3 个非法行均应跳过");
+        assert_eq!(res.warnings.len(), 3, "每个非法行应有警告说明");
+        assert!(res.errors.is_empty(), "非法行不应升级为整体失败");
+
+        let devs = db::devices::list_devices(&conn, None, None).unwrap();
+        assert_eq!(devs.len(), 1);
+        assert_eq!(devs[0].name, "OK-A");
+    }
 
     /// 旧 15 列文件：向后兼容（无第 16 列 → 型号按 'server' 兜底，不报错）。
     #[test]

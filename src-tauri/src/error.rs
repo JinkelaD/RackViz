@@ -9,7 +9,6 @@ pub enum ErrorCode {
     DatabaseError,
     IoError,
     Cancelled,
-    #[allow(dead_code)]
     Conflict,
     #[allow(dead_code)]
     Unknown,
@@ -37,9 +36,14 @@ impl AppError {
     pub fn cancelled(msg: &str) -> Self {
         Self { code: ErrorCode::Cancelled, message: msg.to_string(), detail: None }
     }
-    #[allow(dead_code)]
     pub fn conflict(msg: &str) -> Self {
         Self { code: ErrorCode::Conflict, message: msg.to_string(), detail: None }
+    }
+    /// 该错误是否属于"单条记录被规则拒绝"（校验/冲突）。
+    /// 批量场景（如 Excel 导入）可据此**跳过该条并记警告**，而非让整批失败。
+    #[allow(dead_code)]
+    pub fn is_rejectable(&self) -> bool {
+        matches!(self.code, ErrorCode::ValidationError | ErrorCode::Conflict)
     }
 }
 
