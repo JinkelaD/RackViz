@@ -29,22 +29,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "targets": [],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
-    ],
-    "windows": {
-      "wix": {
-        "language": "zh-CN",
-        "template": "default"
-      },
-      "nsis": {
-        "installMode": "currentUser",
-        "installerIcon": "icons/icon.ico"
-      }
-    }
+    ]
   }
 }

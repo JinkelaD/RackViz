@@ -7,6 +7,7 @@ RackViz 版本历史。格式参考 [Keep a Changelog](https://keepachangelog.co
 ### 版本决策
 
 - 定版 **2.0.0**：依赖栈整体跃迁（React 18→19、TS 5→7、AntD 5→6、Vite 6→8）+ 接口面扩至 34 个 Tauri 命令，语义上够 major；呼应 Stage 1 提交 `chore(v2.0.0)!` 标记（主理人 2026-09-16 拍板）。
+- **交付形态：绿色单文件 exe**（主理人 2026-09-16 拍板）：`bundle.targets: none`，不做 MSI/NSIS 安装包；`rackviz.exe` 自包含（前端资源嵌入、WebView2 系统自带、数据在 `%LOCALAPPDATA%`），双击即用。
 
 ### 产品决策（主理人 2026-09-16 拍板）
 

@@ -34,18 +34,21 @@
 | 前端 | React 19.3 · TypeScript 7.0（strict）· Ant Design 6.6 · Vite 8.3 · react-router-dom 7 · qrcode.react 4 |
 | 数据库 | SQLite（WAL 模式，schema v5：时间戳 + 软删除 + 部分唯一索引） |
 
-## 安装
+## 安装与运行
 
-### 终端用户（安装包）
+**绿色单文件，无需安装**：到 [Releases](../../releases) 下载 `RackViz-v2.0.0-x64.exe`，放到任意目录**双击即用**。
 
-从 [Releases](../../releases) 页面下载对应格式的安装包，双击安装：
+- 前端资源已嵌入 exe，仅依赖系统 WebView2（Windows 10/11 自带）
+- 数据库与日志自动生成于 `%LOCALAPPDATA%\com.rackviz.app\`，不写程序目录
+- 卸载 = 删除 exe + 删除上述数据目录
 
-| 格式 | 说明 |
-|---|---|
-| `.msi` | Windows Installer，推荐 |
-| `.exe`（NSIS） | 安装向导式 |
+**SHA-256 校验**（可选，Release 附件提供 `RackViz-v2.0.0-x64.exe.sha256`）：
 
-> 安装包随首个正式发布（v2.0.0）提供；当前仓库处于发布准备阶段。
+```bat
+certutil -hashfile RackViz-v2.0.0-x64.exe SHA256
+```
+
+比对输出首行与 `.sha256` 文件内容一致即未被篡改。
 
 ### 从源码构建
 
@@ -57,13 +60,11 @@ git clone <repo-url> RackViz
 cd RackViz
 
 :: 一键构建（MSVC 自定位 → npm ci → 前端构建 → cargo build --release）
+:: 产物：src-tauri\target\release\rackviz.exe（绿色单文件）
 build.bat
 
 :: 一键门禁检查（tsc + cargo check + cargo test）
 check.bat
-
-:: 完整安装包（MSI + NSIS）
-cd src-tauri && cargo tauri build
 
 :: 开发模式（前端热更新，首次编译 10-20 分钟）
 cd src-tauri && cargo tauri dev
