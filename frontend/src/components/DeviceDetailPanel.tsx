@@ -142,6 +142,7 @@ export default function DeviceDetailPanel({
                 modelName={selectedDeviceInfo.model?.name}
                 ipAddresses={selectedDeviceInfo.device.ip_addresses}
                 assetNo={selectedDeviceInfo.device.asset_no}
+                serialNo={selectedDeviceInfo.device.serial_no}
                 department={selectedDeviceInfo.device.department}
                 owner={selectedDeviceInfo.device.owner}
               />
@@ -177,6 +178,7 @@ export default function DeviceDetailPanel({
             modelName={selectedDeviceInfo.model?.name}
             ipAddresses={selectedDeviceInfo.device.ip_addresses}
             assetNo={selectedDeviceInfo.device.asset_no}
+            serialNo={selectedDeviceInfo.device.serial_no}
             department={selectedDeviceInfo.device.department}
             owner={selectedDeviceInfo.device.owner}
           />

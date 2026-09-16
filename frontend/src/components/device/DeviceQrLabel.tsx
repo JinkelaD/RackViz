@@ -10,6 +10,8 @@ interface DeviceQrLabelProps {
   ipAddresses: string;
   /** 资产编号 */
   assetNo: string;
+  /** 序列号 */
+  serialNo: string;
   /** 使用部门 */
   department: string;
   /** 责任人 */
@@ -26,8 +28,8 @@ const QR_SIZE = 132;
  * 在任意打印 DPI 下边缘清晰；canvas 为位图，高 DPI 打印会糊。设计所述"双模式适配打印"
  * 即指此选择。
  *
- * 标签结构：左侧二维码，右侧设备可读文字。**标签正文恒为 6 行**，顺序与二维码内容完全一致
- * （`设备名称 / 型号 / IP地址 / 资产编号 / 使用部门 / 责任人`），且由同一份 `buildQrRows`
+ * 标签结构：左侧二维码，右侧设备可读文字。**标签正文恒为 7 行**，顺序与二维码内容完全一致
+ * （`设备名称 / 型号 / IP地址 / 资产编号 / 序列号 / 使用部门 / 责任人`），且由同一份 `buildQrRows`
  * 数据渲染，保证"印着的内容"与"扫到的内容"逐字一致。空字段仍保留整行（如 `使用部门：`），
  * 文本允许换行、不截断（窄面板下标签变高而非省略信息），二维码尺寸固定以保证可扫率。
  */
@@ -36,6 +38,7 @@ export default function DeviceQrLabel({
   modelName,
   ipAddresses,
   assetNo,
+  serialNo,
   department,
   owner,
 }: DeviceQrLabelProps) {
@@ -44,6 +47,7 @@ export default function DeviceQrLabel({
     model: modelName ?? null,
     ip_addresses: ipAddresses,
     asset_no: assetNo,
+    serial_no: serialNo,
     department,
     owner,
   });
@@ -52,6 +56,7 @@ export default function DeviceQrLabel({
     model: modelName ?? null,
     ip_addresses: ipAddresses,
     asset_no: assetNo,
+    serial_no: serialNo,
     department,
     owner,
   });
