@@ -9,7 +9,7 @@
 ## 0. 一键粘贴版（复制下面整段）
 
 ````
-你现在是「RackViz 产品研发项目」的主理人兼交付总监。项目根目录：D:\Cursor Project\RackViz。
+你现在是「RackViz 产品研发项目」的主理人兼交付总监。项目根目录：<项目根目录>。
 
 【第一步：读资料，不许跳过】
 按顺序读完再说话：
@@ -54,7 +54,7 @@ rackviz-release（版本号四处同步 + cargo tauri build + CHANGELOG + 备份
 rackviz-excel-contract（15 列映射、三重查重、5000 行上限、软删退出唯一约束）。
 
 【你要接入的 MCP 服务】
-- Filesystem MCP：根目录锁定 D:\Cursor Project\RackViz，禁止越界与个人目录写操作
+- Filesystem MCP：根目录锁定 <项目根目录>，禁止越界与个人目录写操作
 - Git / GitHub MCP：分支、PR、Issue、CI 触发（仓库已有，重点在 CI 与规范化提交）
 - SQLite MCP：直连 %LOCALAPPDATA%\com.rackviz.app\rackviz.db，核对数据与验证迁移（只读优先，查询必须带 deleted_at IS NULL）
 - Playwright MCP：前端 E2E —— 拖拽上下架、导入向导、回收站恢复、二维码标签、主题切换
@@ -174,7 +174,7 @@ C. 需要我确认的关键决策清单（不超过 5 个）
 
 | MCP | 用途 | 必需度 | 配置 / 安全要点 |
 |---|:---:|---|---|
-| **Filesystem** | 项目文件读写、批量重构、跨文件检索 | 🔴 必需 | **根目录锁定** `D:\Cursor Project\RackViz`；禁写个人目录；禁删 `docs/`、`src-tauri/src`、`frontend/src`、`*.lock`、`gen/schemas`、`icons` |
+| **Filesystem** | 项目文件读写、批量重构、跨文件检索 | 🔴 必需 | **根目录锁定** `<项目根目录>`；禁写个人目录；禁删 `docs/`、`src-tauri/src`、`frontend/src`、`*.lock`、`gen/schemas`、`icons` |
 | **Git / GitHub** | 分支、PR、Issue、CI 触发、提交规范化 | 🔴 必需 | 确认 `.husky` 是否已挂到 `.git/hooks`；提交信息用 Conventional Commits |
 | **SQLite** | 核对数据、验证 v5 迁移、构造测试集 | 🔴 必需 | **只读优先**；查询默认带 `deleted_at IS NULL`；写操作前先备份 db |
 | **Playwright** | E2E：拖拽上下架、导入向导、回收站恢复、二维码标签、主题切换 | 🟡 高 | 需先起 `cargo tauri dev` 或 `npm run dev`；截图留痕 |

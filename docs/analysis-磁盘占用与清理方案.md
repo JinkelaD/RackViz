@@ -325,7 +325,7 @@ strip = "symbols"        # 剥离符号表；或 strip = "debuginfo"
 | 17 | `~/.cargo/registry` | **1.6G** | **🚫 不建议** | **全局共享**，删除会影响机器上所有其他 Rust 项目（全部需要重新下载依赖）。细分实测：`src/` 1.4G（rsproxy.cn 主机 956M + index.crates.io 主机 377M）、`cache/` 172M（rsproxy 115M + crates.io 57M）、`index/` 70M（crates.io 36M + rsproxy 34M） | `cargo fetch`（联网） |
 | 18 | `~/.cargo/bin` | 13M | 不建议 | cargo/rustup 可执行文件 | 重装 rustup |
 | 19 | `~/.cargo/target` | **不存在** | — | 未配置全局共享 target 目录 | — |
-| 20 | `%LOCALAPPDATA%\npm-cache`（`C:\Users\Jinkela\AppData\Local\npm-cache`） | **618M** | 中 | **项目外、全局共享**。清理后 `npm install` 需重新联网下载 | `npm cache clean --force` |
+| 20 | `%LOCALAPPDATA%\npm-cache` | **618M** | 中 | **项目外、全局共享**。清理后 `npm install` 需重新联网下载 | `npm cache clean --force` |
 | 21 | `frontend/src/`、`src-tauri/src/`（22 个 `.rs`/119K）、`docs/`、`*.json` 配置 | ≈2M | **🚫 禁止删除** | 后续其他 agent 需要阅读源码继续开发 | 不可恢复 |
 
 ---

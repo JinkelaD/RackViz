@@ -24,6 +24,9 @@ RackViz.exe
 .DS_Store
 Thumbs.db
 
+# Logs (runtime logs live in %LOCALAPPDATA%, keep repo clean anyway)
+*.log
+
 # Archive
 *.7z
 *.zip

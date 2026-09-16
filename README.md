@@ -2,7 +2,9 @@
 
 **单机 Windows 桌面应用：用拖拽可视化替代 Excel 台账，管理「哪台设备在哪个机柜的哪个 U 位」。**
 
-当前版本 **v2.0.0**（开发中）· Tauri 2 · React 19 · TypeScript 7 · Ant Design 6 · SQLite
+当前版本 **v2.0.0** · Tauri 2 · React 19 · TypeScript 7 · Ant Design 6 · SQLite
+
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tests](https://img.shields.io/badge/tests-104%20passing-brightgreen)
 
 ---
 
@@ -11,11 +13,12 @@
 | 域 | 能力 |
 |---|---|
 | 🖥️ 机柜可视化 | 逐 U 网格渲染、正/背面视图、50–200% 缩放、U 位使用率预警（>85% 红警）、设备悬浮详情 |
-| 🔄 拖拽上下架 | 资源池↔机柜↔机柜自由迁移、U 位冲突检测、多 U 设备按固有高度上架、下架确认 |
+| 🔄 拖拽上下架 | 资源池↔机柜↔机柜自由迁移、U 位冲突与重叠检测、多 U 设备按固有高度上架、下架确认 |
 | 📋 设备台账 | 11 列可配置、列宽拖拽、中文排序、服务端分页、四字段搜索 + 关键词高亮 |
 | 🗑️ 回收站 | 软删除 + 30 天恢复窗口、批量删除、撤销（Ctrl+Z）+ 全局快捷键 |
+| ✅ 输入验证 | 前后端双校验：U 位区间/边界/重叠互斥、IP 格式、状态枚举；Excel 导入非法行自动跳过并警告 |
 | 📥 导入导出 | Excel 15 列映射导入（三重查重、5000 行上限、导入向导）、台账/部署图/单机柜导出、HTML 报表 |
-| 🏷️ 二维码标签 | 设备二维码 + 打印布局（7 字段多行键值契约，纠错级别 M，安静区 4 模块） |
+| 🏷️ 二维码标签 | 设备二维码 + 打印布局（7 字段契约扫码即得；打印自动放大至整页居中） |
 | 💾 备份恢复 | 一键数据库备份 / 恢复 |
 | 🌓 主题 | 暗 / 亮 / 护眼绿 / 夜间蓝四套预设，偏好持久化 |
 | ⚙️ 设置 | 日志开关（运行时生效、按天轮转保留 7 天）、一键打开日志目录 |
@@ -31,15 +34,32 @@
 | 前端 | React 19.3 · TypeScript 7.0（strict）· Ant Design 6.6 · Vite 8.3 · react-router-dom 7 · qrcode.react 4 |
 | 数据库 | SQLite（WAL 模式，schema v5：时间戳 + 软删除 + 部分唯一索引） |
 
-## 快速开始
+## 安装
 
-**环境要求**：Windows 10/11 x64 · Node 22+ · Rust stable（MSVC 工具链）· VS2019 BuildTools（含 Windows SDK）
+### 终端用户（安装包）
+
+从 [Releases](../../releases) 页面下载对应格式的安装包，双击安装：
+
+| 格式 | 说明 |
+|---|---|
+| `.msi` | Windows Installer，推荐 |
+| `.exe`（NSIS） | 安装向导式 |
+
+> 安装包随首个正式发布（v2.0.0）提供；当前仓库处于发布准备阶段。
+
+### 从源码构建
+
+**环境要求**：Windows 10/11 x64 · Node.js 22+ · Rust stable（MSVC 工具链）· Visual Studio 2019 BuildTools（含 Windows SDK）· WebView2 Runtime（Win10/11 一般已内置）
 
 ```bat
+:: 获取代码
+git clone <repo-url> RackViz
+cd RackViz
+
 :: 一键构建（MSVC 自定位 → npm ci → 前端构建 → cargo build --release）
 build.bat
 
-:: 一键检查（tsc + cargo check + cargo test，门禁）
+:: 一键门禁检查（tsc + cargo check + cargo test）
 check.bat
 
 :: 完整安装包（MSI + NSIS）
@@ -47,8 +67,12 @@ cd src-tauri && cargo tauri build
 
 :: 开发模式（前端热更新，首次编译 10-20 分钟）
 cd src-tauri && cargo tauri dev
+```
 
-:: 只跑前端（无后端，invoke 会失败）
+### 开发调试
+
+```bat
+:: 只跑前端（无后端，invoke 会失败——用于纯 UI 样式调整）
 cd frontend && npm run dev
 
 :: 前端类型检查 / 离线红线检查
@@ -56,12 +80,38 @@ cd frontend && npx tsc --noEmit
 cd frontend && npm run lint:offline
 ```
 
+## 使用方法
+
+1. **建机房 → 建机柜**：先在机房页创建机房，再到机柜页添加机柜（高度 4–48U，默认 42U，可设排/列/正背面）
+2. **录入设备**：三种方式任选
+   - 台账页「添加设备」逐台录入
+   - 「导入」向导上传 Excel（15 列模板见 [`test-data/`](test-data/)，含 100 条样例与边界用例；支持跳过/覆盖两种更新模式）
+   - 机柜视图直接从资源池拖拽上架
+3. **日常管理**：机柜视图拖拽迁移设备；U 位不足/超界/重叠会被即时拦截；删除进回收站，30 天内可恢复，误操作 Ctrl+Z 撤销
+4. **标签打印**：设备详情 → 二维码标签 → 打印（仅输出整页居中的二维码图片，扫码即得 7 字段完整信息）
+5. **导出**：台账/机柜部署图/单机柜 Excel 与 HTML 报表（机房 U 位占用率图表）
+
+## 配置说明
+
+应用为单机绿色设计，无需账号与服务端。
+
+| 项 | 位置 / 方式 |
+|---|---|
+| 数据库 | `%LOCALAPPDATA%\com.rackviz.app\rackviz.db`（SQLite WAL） |
+| 日志 | `%LOCALAPPDATA%\com.rackviz.app\logs\`（按天轮转，保留 7 天；设置页可开关） |
+| 主题 | 右上角切换四套预设，偏好本地持久化 |
+| 台账列 | 列显隐 / 列宽拖拽自定义，自动记忆 |
+| 备份 | 设置/维护入口一键备份 / 恢复数据库 |
+
+> release 版控制台隐藏，排查问题看日志目录。
+
 ## 目录结构
 
 ```
 RackViz/
 ├── build.bat / check.bat      # 一键构建 / 门禁脚本
 ├── docs/                      # 项目文档（见下）
+├── test-data/                 # 示例与边界测试数据（Excel 导入演示）
 ├── frontend/                  # React 前端
 │   └── src/
 │       ├── pages/             # RackView（机柜可视化）/ DeviceList（台账）
@@ -89,8 +139,6 @@ RackViz/
 | [docs/RackViz-v1.2-升级方案.md](docs/RackViz-v1.2-升级方案.md) | 功能路线图（N-01~N-21 定义；§八 v1.3 候选已裁剪，见 CHANGELOG） |
 | [docs/RackViz-代码审查标准与流程.md](docs/RackViz-代码审查标准与流程.md) | **强制约束**：P0/P1/P2 审查清单、红线、自动化检查 |
 | [docs/RackViz-v1.2-落地记录.md](docs/RackViz-v1.2-落地记录.md) | v1.2 增量实现实证（COALESCE/Patch\<T\> 等历史决策） |
-| [docs/analysis-磁盘占用与清理方案.md](docs/analysis-磁盘占用与清理方案.md) | 磁盘专项方法论（数字有过期，target 实际约 3.1 GB） |
-| [docs/WORKBUDDY-新建项目提示词.md](docs/WORKBUDDY-新建项目提示词.md) | AI 协作（WorkBuddy）项目初始化提示词 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本历史与决策记录 |
 
 ## 开发红线（摘要，全文见《代码审查标准与流程》）
@@ -104,15 +152,10 @@ RackViz/
 - 每个 `invoke` 必须 try/catch + 用户可见反馈
 - 禁删 lock 文件 / docs / 源码目录 / gen/schemas / icons
 
-## 数据与日志
-
-| 项 | 位置 |
-|---|---|
-| 数据库 | `%LOCALAPPDATA%\com.rackviz.app\rackviz.db` |
-| 日志 | `%LOCALAPPDATA%\com.rackviz.app\logs\`（按天轮转，保留 7 天） |
-
-> release 版控制台隐藏，排查问题看日志目录。
-
 ## 提交规范
 
-Conventional Commits（`feat:` / `fix:` / `chore:` / `docs:` …）。pre-commit 门禁：`cargo check` + `clippy -D warnings` + `cargo test` + `tsc --noEmit` + `eslint` + 离线红线检查。
+Conventional Commits（`feat:` / `fix:` / `chore:` / `docs:` …）。pre-commit 门禁：`cargo check` + `clippy -D warnings` + `cargo test` + `tsc --noEmit` + 离线红线检查；CI（windows-latest）与门禁对齐。
+
+## 许可证
+
+本项目基于 [MIT License](LICENSE) 开源发布。第三方依赖（Tauri、React、Ant Design、rusqlite 等）各自遵循其原始许可证，详见各依赖仓库。
