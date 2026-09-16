@@ -2,6 +2,13 @@
  * RackViz 前端 ESLint 配置（v1.2）
  * 安装依赖后生效：npm i -D eslint @typescript-eslint/parser @typescript-eslint/eslint-plugin eslint-plugin-react-hooks
  * 离线环境请使用 `npm run lint:offline`（scripts/lint-check.mjs，零依赖）
+ *
+ * ⚠️ 兼容状态（2026-09-16 实测）：typescript-eslint@8 官方支持 TS <6.1.0，
+ *    本项目 TS 7.0.2 触发硬门禁报错 "typescript-eslint does not support TS 7.0"
+ *    （上游 issue #10940 跟踪 TS >=7.1 支持）。依赖已回滚，
+ *    `npm run lint` 暂指向离线红线检查 scripts/lint-check.mjs。
+ *    上游发布兼容版本后：安装上述依赖并把 package.json 的 lint script 改回
+ *    "eslint src/ --ext .ts,.tsx" 即可，本配置无需改动。
  */
 module.exports = {
   root: true,

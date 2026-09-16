@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src/ --ext .ts,.tsx",
+    "lint": "node scripts/lint-check.mjs",
     "lint:offline": "node scripts/lint-check.mjs"
   },
   "dependencies": {
