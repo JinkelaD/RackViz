@@ -14,6 +14,9 @@ function isValidIpList(raw: string): boolean {
   return parts.every(p => IPV4_RE.test(p) || p.includes(':'));
 }
 
+/** 未选机柜时的宽松 U 位上限（选中机柜后按其真实高度动态收紧；后端为最终防线） */
+const U_MAX_FALLBACK = 100;
+
 interface DeviceFormModalProps {
   open: boolean;
   /** null = 新建 */
@@ -29,6 +32,11 @@ interface DeviceFormModalProps {
 export default function DeviceFormModal({ open, editing, models, racks, onCancel, onSave }: DeviceFormModalProps) {
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
+
+  // N-10：U 位上限按所选机柜动态收紧（未选机柜时宽松上限；后端按实际机柜做最终校验）
+  const rackIdWatch = Form.useWatch('rack_id', form);
+  const selectedRack = racks.find(r => r.id === Number(rackIdWatch));
+  const uMax = selectedRack?.height_u ?? U_MAX_FALLBACK;
 
   // 打开时按编辑/新增填充
   useEffect(() => {
@@ -59,6 +67,17 @@ export default function DeviceFormModal({ open, editing, models, racks, onCancel
     if (model && startU) {
       form.setFieldsValue({ end_u: startU + model.height_u - 1 });
     }
+  };
+
+  /** 切换机柜 → U 位上限变化，待新 rules 渲染生效后重校验已填 U 位（超界即时提示）。
+   *  React 19 concurrent 下 useWatch 驱动的重渲染在事件处理后调度，
+   *  同步 validateFields 会用旧 rules（max 仍为旧机柜高度），须延后到渲染完成。 */
+  const handleRackChange = () => {
+    setTimeout(() => {
+      form.validateFields(['start_u', 'end_u']).catch(() => {
+        // 校验失败由字段级 message 展示，此处仅吞掉 reject
+      });
+    }, 50);
   };
 
   const handleOk = async () => {
@@ -112,7 +131,7 @@ export default function DeviceFormModal({ open, editing, models, racks, onCancel
           </Select>
         </Form.Item>
         <Form.Item name="rack_id" label="所属机柜">
-          <Select placeholder="请选择机柜（可选）" allowClear>
+          <Select placeholder="请选择机柜（可选）" allowClear onChange={handleRackChange}>
             {racks.map(rack => (
               <Select.Option key={rack.id} value={rack.id}>
                 {rack.name} ({rack.height_u}U)
@@ -141,16 +160,16 @@ export default function DeviceFormModal({ open, editing, models, racks, onCancel
         <Form.Item
           name="start_u"
           label="起始U位"
-          rules={[{ type: 'number', min: 1, max: 100, message: '起始U位须在 1~100 之间' }]}
+          rules={[{ type: 'number', min: 1, max: uMax, message: `起始U位须在 1~${uMax} 之间` }]}
         >
-          <InputNumber min={1} max={100} placeholder="起始U位" onChange={handleStartUChange} />
+          <InputNumber min={1} max={uMax} placeholder="起始U位" onChange={handleStartUChange} />
         </Form.Item>
         <Form.Item
           name="end_u"
           label="结束U位"
           dependencies={['start_u']}
           rules={[
-            { type: 'number', min: 1, max: 100, message: '结束U位须在 1~100 之间' },
+            { type: 'number', min: 1, max: uMax, message: `结束U位须在 1~${uMax} 之间` },
             ({ getFieldValue }) => ({
               validator(_rule, value) {
                 const start = getFieldValue('start_u');
@@ -161,7 +180,7 @@ export default function DeviceFormModal({ open, editing, models, racks, onCancel
             }),
           ]}
         >
-          <InputNumber min={1} max={100} placeholder="结束U位" disabled />
+          <InputNumber min={1} max={uMax} placeholder="结束U位" disabled />
         </Form.Item>
         <Form.Item
           name="ip_addresses"
