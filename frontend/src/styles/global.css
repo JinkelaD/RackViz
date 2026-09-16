@@ -2551,7 +2551,10 @@ body {
   line-height: 1.4;
 }
 .qr-label-key {
-  flex: 0 0 52px;
+  /* 新键名最长 4 个汉字（设备名称/IP地址/资产编号/使用部门）+ 全角冒号「：」共 5 字宽；
+     改用固定基准 + 不收缩，避免挤出值列；保留不换行 */
+  flex: 0 0 68px;
+  white-space: nowrap;
   color: var(--text-muted);
 }
 .qr-label-val {

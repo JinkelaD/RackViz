@@ -137,7 +137,14 @@ export default function DeviceDetailPanel({
           </button>
           {qrOpen && (
             <div className="qr-label-area">
-              <DeviceQrLabel device={selectedDeviceInfo.device} modelName={selectedDeviceInfo.model?.name} />
+              <DeviceQrLabel
+                name={selectedDeviceInfo.device.name}
+                modelName={selectedDeviceInfo.model?.name}
+                ipAddresses={selectedDeviceInfo.device.ip_addresses}
+                assetNo={selectedDeviceInfo.device.asset_no}
+                department={selectedDeviceInfo.device.department}
+                owner={selectedDeviceInfo.device.owner}
+              />
               <button className="detail-btn qr-print-btn" onClick={handlePrintQr}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>
@@ -165,7 +172,14 @@ export default function DeviceDetailPanel({
       {/* N-14：body 级打印根（portal）。屏幕下隐藏，@media print 下仅保留此标签 */}
       {qrOpen && createPortal(
         <div className="qr-print-root">
-          <DeviceQrLabel device={selectedDeviceInfo.device} modelName={selectedDeviceInfo.model?.name} />
+          <DeviceQrLabel
+            name={selectedDeviceInfo.device.name}
+            modelName={selectedDeviceInfo.model?.name}
+            ipAddresses={selectedDeviceInfo.device.ip_addresses}
+            assetNo={selectedDeviceInfo.device.asset_no}
+            department={selectedDeviceInfo.device.department}
+            owner={selectedDeviceInfo.device.owner}
+          />
         </div>,
         document.body,
       )}
