@@ -2491,7 +2491,7 @@ body {
 }
 .qr-print-btn { width: 100%; justify-content: center; }
 
-/* 标签纸：屏幕预览与打印共用同一结构 */
+/* 标签纸：屏幕预览与打印共用同一结构（2026-09-16 起仅含二维码图片，无可读文字） */
 .qr-label-sheet {
   width: 260px;
   max-width: 100%;
@@ -2502,69 +2502,12 @@ body {
   padding: var(--space-3);
   color: var(--text-primary);
 }
-.qr-label-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--border-default);
-  padding-bottom: var(--space-1);
-  margin-bottom: var(--space-2);
-}
-.qr-label-brand {
-  font-weight: 700;
-  font-size: var(--text-sm);
-  color: var(--accent-blue);
-  letter-spacing: 0.02em;
-}
-.qr-label-title {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-}
-.qr-label-body {
-  display: flex;
-  gap: var(--space-3);
-  align-items: flex-start;
-}
 .qr-label-code {
-  flex: 0 0 auto;
+  /* 唯一子元素：在标签纸内水平居中，四周留白即二维码安静区 */
+  display: flex;
+  justify-content: center;
   line-height: 0;
 }
-.qr-label-info {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.qr-label-name {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--text-primary);
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-.qr-label-row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-  line-height: 1.4;
-}
-.qr-label-key {
-  /* 新键名最长 4 个汉字（设备名称/IP地址/资产编号/使用部门）+ 全角冒号「：」共 5 字宽；
-     改用固定基准 + 不收缩，避免挤出值列；保留不换行 */
-  flex: 0 0 68px;
-  white-space: nowrap;
-  color: var(--text-muted);
-}
-.qr-label-val {
-  flex: 1 1 auto;
-  min-width: 0;
-  color: var(--text-secondary);
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-.qr-label-mono { font-family: var(--font-mono); }
 
 /* body 级打印根：屏幕下不渲染任何内容 */
 .qr-print-root { display: none; }
@@ -2604,6 +2547,5 @@ body {
   }
   .qr-label-sheet,
   .qr-label-sheet * { color: #000000 !important; }
-  .qr-label-head { border-bottom-color: #000000 !important; }
 }
 
