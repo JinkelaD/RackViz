@@ -1,0 +1,54 @@
+# RackViz CI —— 与 .husky/pre-commit 门禁对齐（ESLint 步骤除外）
+# 说明：typescript-eslint@8 不支持 TS 7.0（issue #10940），ESLint 步骤暂缺位，
+#       用 scripts/lint-check.mjs 离线红线检查替代；上游兼容后补 eslint 步骤。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: check (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: TypeScript type check
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Offline redline check
+        working-directory: frontend
+        run: npm run lint:offline
+
+      - name: cargo check
+        working-directory: src-tauri
+        run: cargo check --quiet
+
+      - name: cargo clippy
+        working-directory: src-tauri
+        run: cargo clippy --quiet -- -D warnings
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --quiet
