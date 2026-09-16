@@ -2516,7 +2516,8 @@ body {
    N-14 打印布局：只输出二维码标签
    ============================================================ */
 @media print {
-  @page { margin: 12mm; }
+  /* 页边距 10mm：A4 可用区域 190×277mm（原 12mm 收紧，扩大可用面积） */
+  @page { margin: 10mm; }
 
   /* 1) 应用外壳整体隐去（顶栏 #header / 主区 #main / 侧栏 #sidebar / 状态栏 .statusbar / 表格 .ant-table-wrapper 全在其中） */
   #root { display: none !important; }
@@ -2533,8 +2534,13 @@ body {
   .ant-picker-dropdown,
   .ant-wave { display: none !important; }
 
-  /* 3) 仅保留 body 级二维码标签根 */
-  .qr-print-root { display: block !important; }
+  /* 3) 仅保留 body 级二维码标签根：整页居中，消除大片留白 */
+  .qr-print-root {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
 
   /* 4) 打印介质为白纸：为在 4 套主题下都清晰可读、可扫，标签强制白底黑字 */
   .qr-label-sheet {
@@ -2547,5 +2553,14 @@ body {
   }
   .qr-label-sheet,
   .qr-label-sheet * { color: #000000 !important; }
+
+  /* 5) 二维码矢量放大至 185×185mm（10mm 边距下 A4 宽度可用 190mm，留 5mm 裁切余量）。
+     QRCodeSVG 输出 width/height 属性（非 style），CSS 类选择器即可无损覆盖；
+     SVG 矢量缩放边缘不糊，185mm / 53 模块 ≈ 3.5mm/模块，远高于 0.4mm 可扫下限。
+     修复：原按屏幕 132px(≈35mm) 打印，A4 纸四周大片留白。 */
+  .qr-print-root .qr-label-code svg {
+    width: 185mm;
+    height: 185mm;
+  }
 }
 
