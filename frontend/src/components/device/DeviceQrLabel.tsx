@@ -22,6 +22,18 @@ interface DeviceQrLabelProps {
 const QR_SIZE = 132;
 
 /**
+ * 安静区（二维码四周的空白边框），单位为**模块数**。
+ *
+ * 必须为 4：ISO/IEC 18004 规定安静区为 4 模块，`qrcode.react` 的类型定义亦明确
+ * "The QR Code specification requires 4"（其 `marginSize` 默认值为 0）。
+ * 安静区不足时，标签边缘的裁切误差/污损会直接吃掉定位图案，导致打印后扫不出。
+ *
+ * 注：`size` 已包含安静区，故改为 4 不会撑大布局，仅使符号本身在 132px 内略微缩小
+ * （v10/53 模块下每模块约 0.57mm，仍远高于 0.4mm 的可扫下限）。
+ */
+const QR_QUIET_ZONE = 4;
+
+/**
  * 设备二维码标签。
  *
  * **必须使用 SVG 模式（`QRCodeSVG`）而非 canvas**：标签用于打印，SVG 是矢量输出，
@@ -74,7 +86,7 @@ export default function DeviceQrLabel({
             value={content}
             size={QR_SIZE}
             level="M"
-            marginSize={2}
+            marginSize={QR_QUIET_ZONE}
             title={`设备二维码：${name}`}
           />
         </div>
