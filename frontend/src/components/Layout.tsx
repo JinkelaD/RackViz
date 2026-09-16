@@ -141,7 +141,7 @@ export default function Layout() {
         <div id="app">
           <header id="header">
             <div className="logo">Rack<span>Viz</span></div>
-            <span className="version">v1.2</span>
+            <span className="version">v2.0</span>
             <Dropdown
               menu={{
                 items: themeMenuItems,
