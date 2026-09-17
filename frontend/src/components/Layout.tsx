@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { App, Button, Dropdown, Space } from 'antd';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -7,6 +7,10 @@ import { THEME_PRESETS, THEME_PRESET_ORDER, isThemePreset } from '../themes/pres
 import { ViewProvider } from '../contexts/ViewContext';
 import { RoomProvider } from '../contexts/RoomContext';
 import * as tauriApi from '../tauri-api';
+import BackupManagerModal from './device/BackupManagerModal';
+
+/** A1：自动备份轮询间隔（6h；后端另有 24h 去重） */
+const AUTO_BACKUP_INTERVAL_MS = 6 * 3600 * 1000;
 
 export default function Layout() {
   const navigate = useNavigate();
@@ -22,6 +26,10 @@ export default function Layout() {
   // N-18 备份 / 恢复
   const [backupLoading, setBackupLoading] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
+  // A2：自动备份管理面板
+  const [backupManagerOpen, setBackupManagerOpen] = useState(false);
+  // A4 健康引导只在启动后弹一次
+  const healthCheckedRef = useRef(false);
 
   const { theme: currentTheme, setTheme } = useTheme();
 
@@ -46,6 +54,48 @@ export default function Layout() {
       }).catch(console.error);
     }
   }, [settingsOpen]);
+
+  // A1 + A4：启动时完整性自检 → 自动备份（随后每 6h 轮询，后端 24h 去重）
+  useEffect(() => {
+    if (healthCheckedRef.current) return;
+    healthCheckedRef.current = true;
+
+    void (async () => {
+      // A4：完整性自检，异常时引导到备份管理
+      try {
+        const health = await tauriApi.getDbHealth();
+        if (!health.ok) {
+          modal.confirm({
+            title: '数据库自检异常',
+            content: (
+              <div>
+                <p>{health.message}</p>
+                <p>检测到 {health.backup_count} 份自动备份。建议从最近的可用备份恢复，以免数据进一步损坏。</p>
+              </div>
+            ),
+            okText: '打开备份管理',
+            cancelText: '稍后处理',
+            onOk: () => setBackupManagerOpen(true),
+          });
+        }
+      } catch (err) {
+        console.error('数据库健康检查失败:', err);
+      }
+
+      // A1：自动备份（失败仅提示一次，不阻断使用）
+      try {
+        await tauriApi.autoBackup();
+      } catch (err) {
+        message.warning(`自动备份失败：${tauriApi.errorMessage(err)}`);
+      }
+    })();
+
+    const timer = setInterval(() => {
+      void tauriApi.autoBackup().catch(err => console.error('自动备份失败:', err));
+    }, AUTO_BACKUP_INTERVAL_MS);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleToggleLogging = async (checked: boolean) => {
     setLoggingLoading(true);
@@ -253,12 +303,28 @@ export default function Layout() {
                       <Button danger onClick={handleRestore} loading={restoreLoading} disabled={backupLoading}>
                         从备份恢复
                       </Button>
+                      <Button onClick={() => setBackupManagerOpen(true)}>
+                        自动备份管理
+                      </Button>
                     </Space>
                   </div>
                 </div>
               </div>
             </div>
           )}
+
+          {/* A2：自动备份管理面板 */}
+          <BackupManagerModal
+            open={backupManagerOpen}
+            onClose={() => setBackupManagerOpen(false)}
+            onRestoreScheduled={(msg) => {
+              modal.info({
+                title: '恢复已准备，请重启应用',
+                content: msg || '数据恢复已完成准备，请关闭并重新打开应用以生效。',
+                okText: '我知道了',
+              });
+            }}
+          />
         </div>
       </RoomProvider>
     </ViewProvider>

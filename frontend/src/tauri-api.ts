@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
+  BackupInfo,
+  DbHealth,
   DeleteBatchResult,
   Device,
   DeviceModel,
@@ -184,7 +186,7 @@ export function onImportProgress(cb: (p: ImportProgress) => void): Promise<Unlis
   return listen<ImportProgress>('import://progress', (e) => cb(e.payload));
 }
 
-// ===== 维护 API（N-18 备份 / 恢复）=====
+// ===== 维护 API（N-18 备份 / 恢复；A1-A4 自动备份与完整性自检）=====
 
 /** 备份数据库（Rust 侧弹原生保存对话框，返回备份文件路径） */
 export function backupDatabase(): Promise<string> {
@@ -194,6 +196,26 @@ export function backupDatabase(): Promise<string> {
 /** 从备份恢复（延迟交换 + 重启生效） */
 export function restoreDatabase(path: string): Promise<RestoreResult> {
   return invoke('restore_database', { path });
+}
+
+/** A1：自动备份（24h 去重 + 滚动保留 7 份；`message` 含结果说明） */
+export function autoBackup(): Promise<RestoreResult> {
+  return invoke('auto_backup');
+}
+
+/** A2：列出自动备份文件信息（最新在前，含有效性校验） */
+export function listBackups(): Promise<BackupInfo[]> {
+  return invoke('list_backups');
+}
+
+/** A2：删除指定自动备份文件 */
+export function deleteBackup(name: string): Promise<void> {
+  return invoke('delete_backup', { name });
+}
+
+/** A4：启动完整性自检（integrity_check + schema 版本） */
+export function getDbHealth(): Promise<DbHealth> {
+  return invoke('get_db_health');
 }
 
 // ===== Settings API =====

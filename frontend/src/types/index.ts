@@ -25,6 +25,8 @@ export type { ImportResult } from './generated/ImportResult';
 export type { ImportProgress } from './generated/ImportProgress';
 export type { DeleteBatchResult } from './generated/DeleteBatchResult';
 export type { RestoreResult } from './generated/RestoreResult';
+export type { BackupInfo } from './generated/BackupInfo';
+export type { DbHealth } from './generated/DbHealth';
 
 // ===== 纯前端类型（手写）=====
 

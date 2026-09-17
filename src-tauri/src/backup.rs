@@ -18,12 +18,15 @@ use crate::error::AppError;
 
 /// 主库 schema 版本上限（与 `migration::CURRENT_VERSION` 对齐）。
 /// 更高版本的备份文件拒绝恢复，避免「降级」破坏数据。
-const LIVE_SCHEMA_VERSION: i32 = 5;
+pub const LIVE_SCHEMA_VERSION: i32 = 5;
 
 /// 待恢复暂存文件后缀：`<db>.restore-pending`（与主库同目录，保证同卷替换）。
 const STAGING_SUFFIX: &str = ".restore-pending";
 /// 待恢复操作标记文件名：`restore.pending`（与主库同目录）。
 const MARKER_NAME: &str = "restore.pending";
+
+/// 自动备份文件名前缀（与手动备份区分；滚动保留仅作用于该前缀）。
+const AUTO_BACKUP_PREFIX: &str = "rackviz-auto-";
 
 /// 在路径尾部追加后缀（基于 `OsStr`，避免非 UTF-8 路径信息丢失）。
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
@@ -57,6 +60,159 @@ pub fn create_backup(conn: &Connection, dest: &Path) -> Result<(), AppError> {
         .to_str()
         .ok_or_else(|| AppError::io("备份路径包含非法字符"))?;
     conn.execute("VACUUM INTO ?1", params![dest_str])?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// A1：自动备份（每日去重 + 滚动保留）
+// ---------------------------------------------------------------------------
+
+/// 自动备份目录：`<主库同目录>/backups/`。
+pub fn auto_backup_dir(db_path: &Path) -> PathBuf {
+    match db_path.parent() {
+        Some(dir) => dir.join("backups"),
+        None => PathBuf::from("backups"),
+    }
+}
+
+/// 目录下自动备份文件（`rackviz-auto-*.db`）按**文件名时间戳升序**排列。
+fn sorted_auto_backups(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = match fs::read_dir(dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.starts_with(AUTO_BACKUP_PREFIX) && n.ends_with(".db"))
+                        .unwrap_or(false)
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    // 文件名内嵌 UTC 时间戳（rackviz-auto-YYYYMMDD-HHMMSS.db），字典序即时间序
+    files.sort();
+    files
+}
+
+/// 最近一次自动备份文件的修改时间（无自动备份 → `None`）。
+pub fn latest_auto_backup_time(dir: &Path) -> Option<std::time::SystemTime> {
+    sorted_auto_backups(dir)
+        .last()
+        .and_then(|p| fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok())
+}
+
+/// 为自动备份生成本次目标路径：`<dir>/rackviz-auto-YYYYMMDD-HHMMSS.db`。
+pub fn next_auto_backup_path(dir: &Path) -> PathBuf {
+    dir.join(format!(
+        "{}{}.db",
+        AUTO_BACKUP_PREFIX,
+        chrono::Utc::now().format("%Y%m%d-%H%M%S")
+    ))
+}
+
+/// 滚动保留：按文件名时间戳升序仅保留最近 `keep` 份自动备份，
+/// 返回被删除的文件名列表（删除失败仅告警，不阻断）。
+pub fn prune_auto_backups(dir: &Path, keep: usize) -> Vec<String> {
+    let files = sorted_auto_backups(dir);
+    if files.len() <= keep {
+        return Vec::new();
+    }
+    let to_delete = &files[..files.len() - keep];
+    to_delete
+        .iter()
+        .filter_map(|p| {
+            let name = p.file_name()?.to_str()?.to_string();
+            match fs::remove_file(p) {
+                Ok(()) => {
+                    log::info!("[A1] 滚动保留清理旧自动备份: {}", name);
+                    Some(name)
+                }
+                Err(e) => {
+                    log::warn!("[A1] 清理旧自动备份失败（忽略）: {} - {}", name, e);
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// A4：启动完整性自检
+// ---------------------------------------------------------------------------
+
+/// 启动完整性自检：`PRAGMA integrity_check` == ok 且 `user_version <= max_version`。
+///
+/// 失败返回可读错误（供前端引导用户到备份管理恢复）。
+pub fn check_db_integrity(conn: &Connection, max_version: i32) -> Result<(), AppError> {
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .map_err(|e| AppError::io(&format!("integrity_check 执行失败: {}", e)))?;
+    if integrity != "ok" {
+        return Err(AppError::validation(&format!(
+            "数据库结构损坏（integrity_check: {}）",
+            integrity
+        )));
+    }
+    let version: i32 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap_or(0);
+    if version > max_version {
+        return Err(AppError::validation(&format!(
+            "数据库版本（v{}）高于当前程序支持版本（v{}）",
+            version, max_version
+        )));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// A2：备份列表 / 删除
+// ---------------------------------------------------------------------------
+
+/// 列出备份目录中的自动备份文件信息（含有效性校验；按修改时间倒序）。
+///
+/// 单个文件校验失败不阻断整体（valid=false 照常列出，由用户决定删除）。
+pub fn list_backup_infos(dir: &Path) -> Vec<crate::models::BackupInfo> {
+    let mut infos: Vec<crate::models::BackupInfo> = sorted_auto_backups(dir)
+        .iter()
+        .filter_map(|p| {
+            let name = p.file_name()?.to_str()?.to_string();
+            let meta = fs::metadata(p).ok()?;
+            let modified_at = meta
+                .modified()
+                .ok()
+                .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
+                .unwrap_or_default();
+            let valid = validate_backup(p).is_ok();
+            Some(crate::models::BackupInfo {
+                full_path: p.to_string_lossy().to_string(),
+                name,
+                size_bytes: meta.len() as i64,
+                modified_at,
+                valid,
+            })
+        })
+        .collect();
+    infos.reverse(); // 倒序：最新在前
+    infos
+}
+
+/// 删除备份文件：名称白名单校验（仅允许 `rackviz-auto-*.db`），杜绝路径穿越。
+pub fn delete_backup_file(dir: &Path, name: &str) -> Result<(), AppError> {
+    let legal =
+        name.starts_with(AUTO_BACKUP_PREFIX) && name.ends_with(".db") && !name.contains(['/', '\\']);
+    if !legal {
+        return Err(AppError::validation("非法的备份文件名"));
+    }
+    let path = dir.join(name);
+    if !path.is_file() {
+        return Err(AppError::validation("备份文件不存在"));
+    }
+    fs::remove_file(&path)?;
+    log::info!("[操作] 已删除备份: {}", name);
     Ok(())
 }
 
@@ -360,6 +516,85 @@ mod tests {
         let conn = Connection::open(&db_path).unwrap();
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM devices", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 2, "主库应被替换为备份内容");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A1：滚动保留——10 份自动备份 prune(7) 后应剩最新的 7 份。
+    #[test]
+    fn test_prune_auto_backups_keeps_latest_n() {
+        let dir = temp_dir("prune");
+        // 文件名内嵌 UTC 时间戳，字典序即时间序；造 10 份（2026-09-17 00:00 ~ 00:09）
+        for i in 0..10 {
+            let name = format!("rackviz-auto-20260917-00000{}.db", i);
+            fs::write(dir.join(&name), b"stub").unwrap();
+        }
+        // 非自动备份文件不应参与清理
+        fs::write(dir.join("rackviz-backup-manual.db"), b"stub").unwrap();
+
+        let deleted = prune_auto_backups(&dir, 7);
+        assert_eq!(deleted.len(), 3, "应删除最旧的 3 份");
+        assert!(deleted.contains(&"rackviz-auto-20260917-000000.db".to_string()));
+        assert!(deleted.contains(&"rackviz-auto-20260917-000002.db".to_string()));
+
+        let remain = sorted_auto_backups(&dir);
+        assert_eq!(remain.len(), 7, "应保留 7 份");
+        // 最新 3 份（000007-000009）必须在
+        for i in 7..10 {
+            let name = format!("rackviz-auto-20260917-00000{}.db", i);
+            assert!(dir.join(&name).exists(), "{} 应保留", name);
+        }
+        // 手动备份不受影响
+        assert!(dir.join("rackviz-backup-manual.db").exists());
+        // 再 prune：不足 keep 数时应为 no-op
+        assert!(prune_auto_backups(&dir, 7).is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A1：去重窗口判断——latest_auto_backup_time 返回最新文件 mtime。
+    #[test]
+    fn test_latest_auto_backup_time() {
+        let dir = temp_dir("latest");
+        assert!(latest_auto_backup_time(&dir).is_none(), "空目录应返回 None");
+        fs::write(dir.join("rackviz-auto-20260917-000000.db"), b"stub").unwrap();
+        assert!(latest_auto_backup_time(&dir).is_some());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A4：完整性自检——健康库 Ok；user_version 超上限的库 Err。
+    #[test]
+    fn test_check_db_integrity() {
+        let dir = temp_dir("integrity");
+        let db_path = dir.join("rackviz.db");
+        {
+            let conn = open_seeded(&db_path);
+            check_db_integrity(&conn, LIVE_SCHEMA_VERSION).expect("健康库应通过自检");
+        }
+        // 伪造未来版本
+        let db2 = dir.join("future.db");
+        {
+            let conn = Connection::open(&db2).unwrap();
+            migration::run(&conn).unwrap();
+            conn.pragma_update(None, "user_version", 6).unwrap();
+            assert!(check_db_integrity(&conn, LIVE_SCHEMA_VERSION).is_err());
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A2：删除备份的白名单校验——拒绝路径穿越与非自动备份名。
+    #[test]
+    fn test_delete_backup_name_whitelist() {
+        let dir = temp_dir("delbackup");
+        fs::write(dir.join("rackviz-auto-20260917-000000.db"), b"stub").unwrap();
+
+        // 非法名：穿越 / 非前缀 / 非后缀
+        assert!(delete_backup_file(&dir, "../rackviz.db").is_err());
+        assert!(delete_backup_file(&dir, "rackviz.db").is_err());
+        assert!(delete_backup_file(&dir, "rackviz-auto-x.txt").is_err());
+        // 合法名
+        delete_backup_file(&dir, "rackviz-auto-20260917-000000.db").unwrap();
+        assert!(!dir.join("rackviz-auto-20260917-000000.db").exists());
+
         let _ = fs::remove_dir_all(&dir);
     }
 }

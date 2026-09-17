@@ -4,20 +4,24 @@
 //! 「非阻塞 dialog + 独立线程等待」模式；`VACUUM INTO` / 文件复制等重 I/O
 //! 一律放入 `spawn_blocking`，避免冻结 UI 线程。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::backup;
 use crate::error::AppError;
-use crate::models::RestoreResult;
+use crate::models::{BackupInfo, DbHealth, RestoreResult};
 use crate::state::DbState;
 
 /// 恢复前自动备份（安全网）的存放子目录名（位于 app_local_data 下）。
 const AUTO_BACKUP_DIR: &str = "backups";
 /// 主库文件名（与 `lib.rs` setup 一致）。
 const DB_FILE_NAME: &str = "rackviz.db";
+/// A1：自动备份去重窗口（小时内已有自动备份则跳过）。
+const AUTO_BACKUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+/// A1：自动备份滚动保留份数。
+const AUTO_BACKUP_KEEP: usize = 7;
 
 fn save_path_to_string(path: Option<tauri_plugin_dialog::FilePath>) -> Result<PathBuf, AppError> {
     let fp = path.ok_or_else(|| AppError::cancelled("用户取消了保存"))?;
@@ -134,4 +138,113 @@ pub async fn restore_database(
         restart_required: true,
         message: "恢复已准备完成：当前数据库已自动备份，请重启应用以生效。".to_string(),
     })
+}
+
+/// A1：自动备份（每日去重 + 滚动保留 7 份）。
+///
+/// 前端启动时与运行期定时调用；24 小时内已有自动备份则跳过（`performed=false`）。
+/// 失败不阻断应用使用（返回 Err 由前端提示一次即可）。
+#[tauri::command]
+pub async fn auto_backup(state: State<'_, DbState>) -> Result<RestoreResult, AppError> {
+    let pool = state.pool.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<(bool, String), AppError> {
+        let conn = pool.get()?;
+        let db_path = conn
+            .path()
+            .map(PathBuf::from)
+            .ok_or_else(|| AppError::io("无法获取主库路径"))?;
+        let dir = backup::auto_backup_dir(&db_path);
+        std::fs::create_dir_all(&dir)?;
+
+        // 去重：24h 内已有自动备份则跳过
+        if let Some(t) = backup::latest_auto_backup_time(&dir) {
+            if let Ok(age) = std::time::SystemTime::now().duration_since(t) {
+                if age < AUTO_BACKUP_INTERVAL {
+                    return Ok((false, "今日已自动备份，跳过".to_string()));
+                }
+            }
+        }
+
+        let dest = backup::next_auto_backup_path(&dir);
+        backup::create_backup(&conn, &dest)?;
+        let pruned = backup::prune_auto_backups(&dir, AUTO_BACKUP_KEEP);
+        log::info!(
+            "[A1] 自动备份完成: {:?}（清理 {} 份旧备份）",
+            dest,
+            pruned.len()
+        );
+        Ok((true, format!("自动备份完成：{}", dest.file_name().unwrap_or_default().to_string_lossy())))
+    })
+    .await
+    .map_err(|e| AppError::io(&format!("自动备份任务异常: {}", e)))??;
+
+    Ok(RestoreResult {
+        restart_required: false,
+        message: result.1,
+    })
+}
+
+/// A2：列出自动备份文件信息（最新在前，含有效性校验）。
+#[tauri::command]
+pub async fn list_backups(app: tauri::AppHandle) -> Result<Vec<BackupInfo>, AppError> {
+    let db_path = resolve_db_path(&app)?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let dir = backup::auto_backup_dir(&db_path);
+        backup::list_backup_infos(&dir)
+    })
+    .await
+    .map_err(|e| AppError::io(&format!("备份列表任务异常: {}", e)))?;
+    Ok(result)
+}
+
+/// A2：删除指定自动备份文件（名称白名单校验）。
+#[tauri::command]
+pub async fn delete_backup(app: tauri::AppHandle, name: String) -> Result<(), AppError> {
+    let db_path = resolve_db_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = backup::auto_backup_dir(&db_path);
+        backup::delete_backup_file(&dir, &name)
+    })
+    .await
+    .map_err(|e| AppError::io(&format!("删除备份任务异常: {}", e)))?
+}
+
+/// A4：启动完整性自检（integrity_check + schema 版本上限）。
+///
+/// 前端启动时查询；异常时引导用户到备份管理恢复。
+#[tauri::command]
+pub async fn get_db_health(state: State<'_, DbState>) -> Result<DbHealth, AppError> {
+    let pool = state.pool.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> DbHealth {
+        let health_from = |r: Result<(), AppError>, count: i64| DbHealth {
+            ok: r.is_ok(),
+            message: match &r {
+                Ok(()) => String::new(),
+                Err(e) => e.to_string(),
+            },
+            backup_count: count,
+        };
+        match pool.get() {
+            Ok(conn) => {
+                let r = crate::backup::check_db_integrity(&conn, crate::backup::LIVE_SCHEMA_VERSION);
+                // 备份数尽力统计（失败计 0）
+                let count = conn
+                    .path()
+                    .map(|p| {
+                        let dir = backup::auto_backup_dir(Path::new(p));
+                        backup::list_backup_infos(&dir).len() as i64
+                    })
+                    .unwrap_or(0);
+                health_from(r, count)
+            }
+            Err(e) => DbHealth {
+                ok: false,
+                message: format!("获取数据库连接失败: {}", e),
+                backup_count: 0,
+            },
+        }
+    })
+    .await
+    .map_err(|e| AppError::io(&format!("完整性自检任务异常: {}", e)))?;
+    Ok(result)
 }

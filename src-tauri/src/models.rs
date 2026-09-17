@@ -354,6 +354,38 @@ pub struct RestoreResult {
     pub message: String,
 }
 
+/// 备份文件信息（A2 自动备份面板）。
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../frontend/src/types/generated/")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BackupInfo {
+    /// 文件名（如 `rackviz-auto-20260917-080000.db`）
+    pub name: String,
+    /// 完整路径（恢复时传给 restore_database）
+    pub full_path: String,
+    /// 文件大小（字节）
+    #[ts(type = "number")]
+    pub size_bytes: i64,
+    /// 修改时间（UTC ISO8601）
+    pub modified_at: String,
+    /// 是否通过完整性校验（可安全恢复）
+    pub valid: bool,
+}
+
+/// 启动完整性自检结果（A4）。
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../frontend/src/types/generated/")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DbHealth {
+    /// true = 数据库健康
+    pub ok: bool,
+    /// 异常时的人类可读原因
+    pub message: String,
+    /// 自动备份目录中的可用备份数（异常时引导恢复）
+    #[ts(type = "number")]
+    pub backup_count: i64,
+}
+
 /// 设备类型归一化（N-21）：接受中文名/英文枚举值，大小写不敏感、忽略空白与 `_`/`-`；
 /// 未知 / 空串 → `"other"`（兜底，不阻断导入）。
 ///
