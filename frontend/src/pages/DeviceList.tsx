@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import type { Key } from 'react';
 import { Table, Button, Input, Popover, Checkbox, App, Dropdown } from 'antd';
 import type { TableProps, InputRef } from 'antd';
-import { PlusOutlined, SettingOutlined, ColumnHeightOutlined, UploadOutlined, ExportOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, SettingOutlined, ColumnHeightOutlined, UploadOutlined, ExportOutlined, ReloadOutlined, DeleteOutlined, PrinterOutlined } from '@ant-design/icons';
 import { usePagedDevices } from '../hooks/usePagedDevices';
 import { useDeviceModels } from '../hooks/useDeviceModels';
 import { useRacks } from '../hooks/useRacks';
@@ -16,6 +16,7 @@ import DeviceFormModal from '../components/device/DeviceFormModal';
 import ModelManageModal from '../components/device/ModelManageModal';
 import TrashDrawer from '../components/device/TrashDrawer';
 import ImportWizardModal from '../components/device/ImportWizardModal';
+import BatchPrintModal from '../components/device/BatchPrintModal';
 import ResizableTitle from '../components/device/ResizableTitle';
 import { ALL_COLUMNS, DEFAULT_COLUMN_WIDTHS, buildDeviceColumns, DeviceColumnKey } from '../components/device/deviceColumns';
 
@@ -49,6 +50,8 @@ export default function DeviceList() {
   // 已选设备对象缓存（跨页时用于「在架」计数；onChange 的 second 参数仅含当前页选中行）
   const [selectedDeviceMap, setSelectedDeviceMap] = useState<Record<number, Device>>({});
   const [batchDeleting, setBatchDeleting] = useState(false);
+  // B4：二维码标签批量打印（单选/多选统一走批量通道）
+  const [batchPrintOpen, setBatchPrintOpen] = useState(false);
 
   const [visibleColumns, setVisibleColumns] = useState<DeviceColumnKey[]>(
     ALL_COLUMNS.map(c => c.key)
@@ -366,6 +369,9 @@ export default function DeviceList() {
             <span className="selection-onsite">其中 {onsiteSelectedCount} 台在架</span>
           )}
           <div className="selection-actions">
+            <Button icon={<PrinterOutlined />} onClick={() => setBatchPrintOpen(true)}>
+              打印标签
+            </Button>
             <Button type="primary" danger loading={batchDeleting} disabled={batchDeleting} onClick={handleBatchDelete}>
               批量删除
             </Button>
@@ -427,6 +433,15 @@ export default function DeviceList() {
         open={importWizardOpen}
         onClose={() => setImportWizardOpen(false)}
         onImported={refresh}
+      />
+
+      <BatchPrintModal
+        open={batchPrintOpen}
+        devices={selectedRowKeys.map(k => selectedDeviceMap[Number(k)]).filter(Boolean)}
+        models={models}
+        racks={racks}
+        rooms={rooms}
+        onClose={() => setBatchPrintOpen(false)}
       />
     </div>
   );
