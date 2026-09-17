@@ -18,6 +18,8 @@ askama = "0.16"
 chrono = { version = "0.4", features = ["serde"] }
 log = "0.4"
 flexi_logger = "0.31"
+# C1：IPC DTO → TypeScript 类型自动生成（serde-compat 默认开启；NaiveDate 需 chrono-impl）
+ts-rs = { version = "10", features = ["chrono-impl", "no-serde-warnings"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

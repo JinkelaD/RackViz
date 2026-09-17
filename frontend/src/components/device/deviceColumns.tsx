@@ -73,10 +73,10 @@ export interface DeviceActions {
 export interface DeviceColumnOptions {
   /** 当前搜索关键词（用于高亮；空则不包裹 <mark>） */
   search?: string | null;
-  /** 当前服务端排序字段（受控 sortOrder 依据） */
-  sortField?: DeviceSortField | null;
-  /** 当前服务端排序方向 */
-  sortOrder?: 'asc' | 'desc' | null;
+  /** 当前服务端排序字段（C1：DeviceQuery.sort_field 生成即 string；白名单由发送侧 UI 约束） */
+  sortField?: string | null;
+  /** 当前服务端排序方向（传输层为 string；serverSorter 内已做 asc/desc 判定） */
+  sortOrder?: string | null;
 }
 
 /**

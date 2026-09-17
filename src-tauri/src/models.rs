@@ -47,6 +47,8 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Patch<T> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../frontend/src/types/generated/")]
 #[serde(rename_all = "snake_case")]
 pub struct DeviceModel {
     pub id: i32,
@@ -63,6 +65,8 @@ pub struct DeviceModel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../frontend/src/types/generated/")]
 #[serde(rename_all = "snake_case")]
 pub struct Room {
     pub id: i32,
@@ -74,6 +78,8 @@ pub struct Room {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../frontend/src/types/generated/")]
 #[serde(rename_all = "snake_case")]
 pub struct Rack {
     pub id: i32,
@@ -89,6 +95,8 @@ pub struct Rack {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../frontend/src/types/generated/")]
 #[serde(rename_all = "snake_case")]
 pub struct Device {
     pub id: i32,
@@ -226,6 +234,8 @@ pub struct DeviceUpdate {
 /// Excel 导入结果（N-04/N-21）。
 ///
 /// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**。
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../frontend/src/types/generated/")]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ImportResult {
     /// 新增设备数
@@ -249,6 +259,8 @@ pub struct ImportResult {
 /// 由 `import_devices_excel` 在 blocking 任务中经 `AppHandle::emit("import://progress", ..)`
 /// 推送；前端 `useImportProgress` 消费。字段一律 snake_case（§8-15 N-A 裁决）。
 /// `phase` 取值：`"parsing"`（解析文件） | `"importing"`（写入数据） | `"done"`（完成）。
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../frontend/src/types/generated/")]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ImportProgress {
     /// 已处理的数据行数
@@ -264,6 +276,8 @@ pub struct ImportProgress {
 /// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**（字段名本身即为 snake_case）。
 /// 容器级 `#[serde(default)]`：任一字段缺失即取默认（`None`），便于前端按需只传部分条件。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../frontend/src/types/generated/")]
 #[serde(default)]
 pub struct DeviceQuery {
     /// 机柜过滤
@@ -279,25 +293,32 @@ pub struct DeviceQuery {
     /// 排序方向（仅 asc|desc，默认 asc）
     pub sort_order: Option<String>,
     /// 偏移量（默认 0）
+    #[ts(type = "number")]
     pub offset: Option<i64>,
     /// 每页数量（默认 100，上限 1000）
+    #[ts(type = "number")]
     pub limit: Option<i64>,
 }
 
 /// 设备分页结果（N-01）。
 ///
 /// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**。
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../frontend/src/types/generated/")]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DevicePage {
     /// 当前页设备
     pub items: Vec<Device>,
     /// 满足过滤条件的总记录数（用于前端分页器）
+    #[ts(type = "number")]
     pub total: i64,
 }
 
 /// Excel 导入选项（N-04/N-05）。
 ///
 /// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**。
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../frontend/src/types/generated/")]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ImportOptions {
     /// 已存在记录的更新模式：`"skip"`（跳过） | `"overwrite"`（覆盖）
@@ -310,6 +331,8 @@ pub struct ImportOptions {
 ///
 /// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`** →
 /// JSON `{ "deleted": n, "not_found": [ids] }`。
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../frontend/src/types/generated/")]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DeleteBatchResult {
     /// 成功（软）删除的设备数
@@ -321,6 +344,8 @@ pub struct DeleteBatchResult {
 /// 备份/恢复结果（N-18）。
 ///
 /// 字段一律 snake_case（§8-15 N-A 裁决），**不添加 `rename_all`**。
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../frontend/src/types/generated/")]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RestoreResult {
     /// 是否需重启应用方可生效

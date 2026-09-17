@@ -12,6 +12,12 @@ cargo check --quiet || { echo "❌ cargo check 失败"; exit 1; }
 cargo clippy --quiet -- -D warnings || { echo "❌ clippy 发现问题"; exit 1; }
 cargo test --quiet || { echo "❌ 测试失败"; exit 1; }
 
+# C1 防漂移：cargo test 会重跑 ts-rs 导出；生成物若与暂存区不一致 = 前后端类型漂移
+if ! git diff --exit-code --quiet -- ../frontend/src/types/generated/; then
+  echo "❌ TS 类型生成物与 Rust 模型不同步：请先提交 cargo test 重新生成的 frontend/src/types/generated/";
+  exit 1;
+fi
+
 # 前端检查
 cd "$ROOT_DIR/frontend" || exit 1
 npx tsc --noEmit --pretty || { echo "❌ TypeScript 类型检查失败"; exit 1; }

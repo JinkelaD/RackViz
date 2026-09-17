@@ -52,3 +52,8 @@ jobs:
       - name: cargo test
         working-directory: src-tauri
         run: cargo test --quiet
+
+      # C1 防漂移：ts-rs 导出重跑后生成物必须与仓库一致
+      - name: TS bindings drift check
+        working-directory: src-tauri
+        run: git diff --exit-code -- ../frontend/src/types/generated/
