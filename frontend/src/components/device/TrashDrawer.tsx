@@ -58,7 +58,7 @@ export default function TrashDrawer({ open, onClose, onRestored }: TrashDrawerPr
   const handleRestore = useCallback(async (device: Device) => {
     setRestoringId(device.id);
     try {
-      await api.restoreDevice(device.id);
+      await api.restoreDevice(device.id); // lint-ok：try/catch 包裹（下方 catch）
       message.success(`已恢复设备「${device.name}」`);
       load();
       onRestored();

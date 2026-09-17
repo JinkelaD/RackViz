@@ -22,7 +22,7 @@ export function useDevices() {
 
   /** N-20 批量删除（非乐观）：成功 refresh、失败抛出且列表不变 */
   const removeMany = useCallback(async (ids: number[]): Promise<DeleteBatchResult> => {
-    const result = await api.deleteDevices(ids);
+    const result = await api.deleteDevices(ids); // lint-ok：设计为失败向上抛出，调用方（DeviceList.handleBatchDelete）统一 catch
     refresh();
     return result;
   }, [refresh]);

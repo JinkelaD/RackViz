@@ -74,7 +74,7 @@ export default function ImportWizardModal({ open, onClose, onImported }: ImportW
     setResult(null);
     await begin();
     try {
-      const r = await api.importExcelFromPath(filePath, options);
+      const r = await api.importExcelFromPath(filePath, options); // lint-ok：try/catch 包裹（下两行）
       setResult(r);
       onImported();
     } catch (err) {

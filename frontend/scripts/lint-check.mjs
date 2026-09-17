@@ -28,8 +28,6 @@ const AS_WHITELIST = [
   /as DeviceListContext/, // 保留类型引用
   /\} as T :/, // useApiList 乐观更新合并（函数式 setState 内收窄）
   /App as AntdApp/, // antd 命名导入别名，非断言
-  /as unknown as Record<string, unknown>/, // 撤销栈深拷贝收窄 ×3（useRackView:210/427、DeviceList:89）——待重构为类型守卫
-  /as DeviceSortField \| undefined/, // AntD Table sorter 回调参数收窄（DeviceList:246）——待重构
 ];
 
 function walk(dir, out = []) {
@@ -51,6 +49,9 @@ for (const file of walk(ROOT)) {
   lines.forEach((line, idx) => {
     const no = idx + 1;
     const loc = `${file.replace(ROOT + '\\', '').replace(ROOT + '/', '')}:${no}`;
+
+    // 0. 行内豁免：`// lint-ok` 供启发式误报的人工确认标记（须注明理由，审查时复核）
+    if (/\/\/ lint-ok\b/.test(line)) return;
 
     // 1. 非空断言（排除泛型/解构/比较等误报的宽松匹配由人工复核，标记警告）
     const nonNull = line.match(/\.\w+!/);

@@ -11,6 +11,7 @@ import { Device, DeviceSortField } from '../types';
 import { useRoomContext } from '../contexts/RoomContext';
 import { useUndo } from '../contexts/UndoContext';
 import { useRegisterShortcuts } from '../hooks/useGlobalShortcuts';
+import { pickFields } from '../utils/objectFields';
 import * as tauriApi from '../tauri-api';
 import DeviceFormModal from '../components/device/DeviceFormModal';
 import ModelManageModal from '../components/device/ModelManageModal';
@@ -18,7 +19,7 @@ import TrashDrawer from '../components/device/TrashDrawer';
 import ImportWizardModal from '../components/device/ImportWizardModal';
 import BatchPrintModal from '../components/device/BatchPrintModal';
 import ResizableTitle from '../components/device/ResizableTitle';
-import { ALL_COLUMNS, DEFAULT_COLUMN_WIDTHS, buildDeviceColumns, DeviceColumnKey } from '../components/device/deviceColumns';
+import { ALL_COLUMNS, DEFAULT_COLUMN_WIDTHS, buildDeviceColumns, DeviceColumnKey, isSortField } from '../components/device/deviceColumns';
 
 /** N-20：单次批量删除上限（与后端 1000 校验一致） */
 const MAX_BATCH_DELETE = 1000;
@@ -88,9 +89,7 @@ export default function DeviceList() {
       if (editing) {
         // N-11：先按 payload 字段快照原值，作为逆操作回填
         const inverse: Partial<Device> = {};
-        Object.keys(payload).forEach(k => {
-          (inverse as Record<string, unknown>)[k] = (editing as unknown as Record<string, unknown>)[k];
-        });
+        Object.assign(inverse, pickFields(editing, Object.keys(payload)));
         await tauriApi.updateDevice(editing.id, payload as Partial<Device>);
         pushUndo({
           label: `编辑设备「${editing.name}」`,
@@ -246,7 +245,7 @@ export default function DeviceList() {
   const handleTableChange: TableProps<Device>['onChange'] = (pag, _filters, sorter) => {
     const s = Array.isArray(sorter) ? sorter[0] : sorter;
     const rawField = s?.field;
-    const field = (Array.isArray(rawField) ? rawField[0] : rawField) as DeviceSortField | undefined;
+    const field = isSortField(rawField) ? rawField : undefined;
     const order: 'asc' | 'desc' | null = s?.order === 'ascend' ? 'asc' : s?.order === 'descend' ? 'desc' : null;
     const nextSortField = order && field ? field : null;
 

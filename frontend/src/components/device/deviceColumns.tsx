@@ -69,6 +69,16 @@ export interface DeviceActions {
   onDelete: (device: Device) => void;
 }
 
+/** 服务端排序白名单（与后端 `query_devices` 白名单一一对应；isSortField 守卫的数据源） */
+const SORT_FIELD_SET: ReadonlySet<string> = new Set([
+  'name', 'ip_addresses', 'serial_no', 'asset_no', 'status', 'power_watt', 'created_at', 'updated_at', 'rack_id',
+]);
+
+/** AntD sorter field → DeviceSortField 类型守卫（C2a：替代裸 `as DeviceSortField` 收窄） */
+export function isSortField(v: unknown): v is DeviceSortField {
+  return typeof v === 'string' && SORT_FIELD_SET.has(v);
+}
+
 /** 服务端分页/排序/高亮所需的受控状态（由 DeviceList 传入） */
 export interface DeviceColumnOptions {
   /** 当前搜索关键词（用于高亮；空则不包裹 <mark>） */

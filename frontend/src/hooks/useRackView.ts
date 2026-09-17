@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import { App } from 'antd';
+import { pickFields } from '../utils/objectFields';
 import { useRacks } from './useRacks';
 import { useDevices } from './useDevices';
 import { useDeviceModels } from './useDeviceModels';
@@ -206,9 +207,7 @@ export function useRackView() {
     await update(id, values as Partial<Device>);
     if (prev) {
       const inverse: Partial<Device> = {};
-      Object.keys(values).forEach(k => {
-        (inverse as Record<string, unknown>)[k] = (prev as unknown as Record<string, unknown>)[k];
-      });
+      Object.assign(inverse, pickFields(prev, Object.keys(values)));
       pushUndo({ label: `编辑设备「${prev.name}」`, undo: async () => { await update(id, inverse); } });
     }
     setDeviceDetailVisible(false);
@@ -423,9 +422,7 @@ export function useRackView() {
     await update(id, data);
     if (prev) {
       const inverse: Partial<Device> = {};
-      Object.keys(data).forEach(k => {
-        (inverse as Record<string, unknown>)[k] = (prev as unknown as Record<string, unknown>)[k];
-      });
+      Object.assign(inverse, pickFields(prev, Object.keys(data)));
       pushUndo({ label: `编辑设备「${prev.name}」`, undo: async () => { await update(id, inverse); } });
     }
   }, [devices, update, pushUndo]);
