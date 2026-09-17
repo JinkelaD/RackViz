@@ -4,6 +4,15 @@ RackViz 版本历史。格式参考 [Keep a Changelog](https://keepachangelog.co
 
 ## [Unreleased] — v2.1.0 开发中
 
+### B2 批量编辑
+
+- **入口**：台账选区操作条新增「批量编辑」，对多选设备统一修改 机柜 / U 位 / 状态（机房仅作机柜过滤器——设备经机柜归属机房，不存在"只改机房"）。
+- **U 位三模式**：保持原位（搬移保留区间）/ 清空下架（rack+U 全 Clear，与详情面板「未上架」同语义）/ **自动排布**（首适应算法：按名称序从起始 U 起依设备固有高度安放，占用图 = 目标机柜上未被选中的设备；实时预览每台目标区间，放不下单独标注）。
+- **N-10 复用**：逐台调用 `updateDevice`，后端 `update_device` 校验（U 位边界/重叠/状态白名单）为最终防线；逐台独立提交，失败逐台报告（同导入"跳过+警告"语义），其余设备不受影响。
+- **N-11 撤销**：提交前快照原 rack/U 位/状态，Ctrl+Z 逐台回填（null 传 null = Patch::Clear）。
+- **空修改拦截**：机柜 / U 位 / 状态均未变更时确定按钮禁用。
+- **验证**：Playwright 真组件冒烟三场景——自动排布预览与 payload（`{rack_id, start_u, end_u}`）、清空下架 payload（`{rack_id:null, start_u:null, end_u:null}`）、保持原位+状态 payload（U 位键缺省 = Unset）全部符合 Patch 三态语义；`tsc --noEmit` + lint-check 全绿。零后端改动。
+
 ### B1 全局搜索
 
 - **搜索字段扩为五字段**（名称 / IP / 序列号 / 资产编号 / 责任人）：`query_devices`（台账分页）与 `list_devices`（机柜视图）搜索口径一致；LIKE 通配符转义 + `ESCAPE '\'` 红线不变。

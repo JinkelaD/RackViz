@@ -3,8 +3,9 @@ import type { Key } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Table, Button, Input, Popover, Checkbox, App, Dropdown } from 'antd';
 import type { TableProps, InputRef } from 'antd';
-import { PlusOutlined, SettingOutlined, ColumnHeightOutlined, UploadOutlined, ExportOutlined, ReloadOutlined, DeleteOutlined, PrinterOutlined } from '@ant-design/icons';
+import { PlusOutlined, SettingOutlined, ColumnHeightOutlined, UploadOutlined, ExportOutlined, ReloadOutlined, DeleteOutlined, PrinterOutlined, FormOutlined } from '@ant-design/icons';
 import { usePagedDevices } from '../hooks/usePagedDevices';
+import { useDevices } from '../hooks/useDevices';
 import { useDeviceModels } from '../hooks/useDeviceModels';
 import { useRacks } from '../hooks/useRacks';
 import { useRooms } from '../hooks/useRooms';
@@ -20,6 +21,7 @@ import ModelManageModal from '../components/device/ModelManageModal';
 import TrashDrawer from '../components/device/TrashDrawer';
 import ImportWizardModal from '../components/device/ImportWizardModal';
 import BatchPrintModal from '../components/device/BatchPrintModal';
+import BatchEditModal from '../components/device/BatchEditModal';
 import ResizableTitle from '../components/device/ResizableTitle';
 import { ALL_COLUMNS, DEFAULT_COLUMN_WIDTHS, buildDeviceColumns, DeviceColumnKey, isSortField } from '../components/device/deviceColumns';
 
@@ -57,6 +59,10 @@ export default function DeviceList() {
   const [batchDeleting, setBatchDeleting] = useState(false);
   // B4：二维码标签批量打印（单选/多选统一走批量通道）
   const [batchPrintOpen, setBatchPrintOpen] = useState(false);
+  // B2：批量编辑（机柜/U 位/状态）
+  const [batchEditOpen, setBatchEditOpen] = useState(false);
+  // B2 自动排布需全量设备算目标机柜占用图（本地 IPC，开销可忽略）
+  const { devices: allDevices } = useDevices();
 
   const [visibleColumns, setVisibleColumns] = useState<DeviceColumnKey[]>(
     ALL_COLUMNS.map(c => c.key)
@@ -388,6 +394,9 @@ export default function DeviceList() {
             <span className="selection-onsite">其中 {onsiteSelectedCount} 台在架</span>
           )}
           <div className="selection-actions">
+            <Button icon={<FormOutlined />} onClick={() => setBatchEditOpen(true)}>
+              批量编辑
+            </Button>
             <Button icon={<PrinterOutlined />} onClick={() => setBatchPrintOpen(true)}>
               打印标签
             </Button>
@@ -452,6 +461,17 @@ export default function DeviceList() {
         open={importWizardOpen}
         onClose={() => setImportWizardOpen(false)}
         onImported={refresh}
+      />
+
+      <BatchEditModal
+        open={batchEditOpen}
+        devices={selectedRowKeys.map(k => selectedDeviceMap[Number(k)]).filter(Boolean)}
+        allDevices={allDevices}
+        racks={racks}
+        rooms={rooms}
+        refresh={refresh}
+        onCancel={() => setBatchEditOpen(false)}
+        onDone={() => { setBatchEditOpen(false); refresh(); }}
       />
 
       <BatchPrintModal
