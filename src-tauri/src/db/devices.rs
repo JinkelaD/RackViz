@@ -93,9 +93,17 @@ pub fn list_devices(conn: &Connection, rack_id: Option<i32>, search: Option<Stri
     }
     if let Some(ref s) = search {
         if !s.trim().is_empty() {
+            // B1 全局搜索：五字段同参（与 query_devices 口径一致）；
             // 通配符转义 + ESCAPE '\'（审查红线 S-2 / D-1）
-            conditions.push(format!("name LIKE ?{} ESCAPE '\\'", param_values.len() + 1));
             param_values.push(format!("%{}%", escape_like(s)));
+            let idx = param_values.len();
+            conditions.push(format!(
+                "(name LIKE ?{idx} ESCAPE '\\' \
+                 OR ip_addresses LIKE ?{idx} ESCAPE '\\' \
+                 OR serial_no LIKE ?{idx} ESCAPE '\\' \
+                 OR asset_no LIKE ?{idx} ESCAPE '\\' \
+                 OR owner LIKE ?{idx} ESCAPE '\\')"
+            ));
         }
     }
 
@@ -121,7 +129,8 @@ pub fn list_devices(conn: &Connection, rack_id: Option<i32>, search: Option<Stri
 ///
 /// - 过滤：默认 `deleted_at IS NULL`；`include_deleted=true` 时才放行；
 ///   `rack_id = ?`；`room_id` 经 `rack_id IN (SELECT id FROM racks WHERE room_id = ?)`。
-/// - 搜索：`(name LIKE ? OR ip_addresses LIKE ? OR serial_no LIKE ? OR asset_no LIKE ?)`，
+/// - 搜索：**五字段同参**（B1 全局搜索）——
+///   `(name LIKE ? OR ip_addresses LIKE ? OR serial_no LIKE ? OR asset_no LIKE ? OR owner LIKE ?)`，
 ///   复用 `escape_like` 并带 `ESCAPE '\'`。
 /// - 排序：**白名单映射**字段 → 列名；`sort_order` 仅 `asc|desc`；**绝不允许前端字符串裸拼接**。
 /// - 分页：`LIMIT ? OFFSET ?`。
@@ -148,7 +157,7 @@ pub fn query_devices(conn: &Connection, q: &DeviceQuery) -> Result<(Vec<Device>,
             params.len()
         ));
     }
-    // 4) 多字段搜索（四字段同参）
+    // 4) 多字段搜索（五字段同参：B1 全局搜索）
     if let Some(ref s) = q.search {
         let s = s.trim();
         if !s.is_empty() {
@@ -158,7 +167,8 @@ pub fn query_devices(conn: &Connection, q: &DeviceQuery) -> Result<(Vec<Device>,
                 "(name LIKE ?{idx} ESCAPE '\\' \
                  OR ip_addresses LIKE ?{idx} ESCAPE '\\' \
                  OR serial_no LIKE ?{idx} ESCAPE '\\' \
-                 OR asset_no LIKE ?{idx} ESCAPE '\\')"
+                 OR asset_no LIKE ?{idx} ESCAPE '\\' \
+                 OR owner LIKE ?{idx} ESCAPE '\\')"
             ));
         }
     }
@@ -1039,6 +1049,47 @@ mod tests {
         assert_eq!(total_ip, 1);
         assert_eq!(items_ip.len(), 1);
         assert_eq!(items_ip[0].name, "B");
+    }
+
+    // ==================== B1 全局搜索（五字段含 owner） ====================
+
+    /// B1：`query_devices` 搜索命中 owner（责任人）字段
+    #[test]
+    fn test_query_devices_owner_search() {
+        let conn = setup_db();
+        insert_device(&conn, &DeviceCreate { name: "Web-01".into(), owner: Some("张三".into()), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "Web-02".into(), owner: Some("李四".into()), ..Default::default() }).unwrap();
+
+        let (items, total) = query_devices(&conn, &DeviceQuery {
+            search: Some("张三".into()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "Web-01");
+    }
+
+    /// B1：`list_devices`（机柜视图搜索）与 `query_devices` 搜索口径一致——
+    /// 同为五字段（name / ip_addresses / serial_no / asset_no / owner）。
+    #[test]
+    fn test_list_devices_multi_field_search_including_owner() {
+        let conn = setup_db();
+        insert_device(&conn, &DeviceCreate { name: "A".into(), owner: Some("王五".into()), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "B".into(), ip_addresses: Some("10.0.0.8".into()), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "C".into(), serial_no: Some("SN-LIST".into()), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "D".into(), asset_no: Some("AS-LIST".into()), ..Default::default() }).unwrap();
+        insert_device(&conn, &DeviceCreate { name: "Nope".into(), ..Default::default() }).unwrap();
+
+        // owner 命中
+        let hit_owner = list_devices(&conn, None, Some("王五".into())).unwrap();
+        assert_eq!(hit_owner.len(), 1);
+        assert_eq!(hit_owner[0].name, "A");
+        // IP / SN / 资产编号命中
+        assert_eq!(list_devices(&conn, None, Some("10.0.0".into())).unwrap().len(), 1);
+        assert_eq!(list_devices(&conn, None, Some("SN-LIST".into())).unwrap().len(), 1);
+        assert_eq!(list_devices(&conn, None, Some("AS-LIST".into())).unwrap().len(), 1);
+        // 无关词不命中
+        assert!(list_devices(&conn, None, Some("NoMatch".into())).unwrap().is_empty());
     }
 
     #[test]

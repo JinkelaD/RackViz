@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import type { Key } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Table, Button, Input, Popover, Checkbox, App, Dropdown } from 'antd';
 import type { TableProps, InputRef } from 'antd';
 import { PlusOutlined, SettingOutlined, ColumnHeightOutlined, UploadOutlined, ExportOutlined, ReloadOutlined, DeleteOutlined, PrinterOutlined } from '@ant-design/icons';
@@ -9,6 +10,7 @@ import { useRacks } from '../hooks/useRacks';
 import { useRooms } from '../hooks/useRooms';
 import { Device, DeviceSortField } from '../types';
 import { useRoomContext } from '../contexts/RoomContext';
+import { useViewContext } from '../contexts/ViewContext';
 import { useUndo } from '../contexts/UndoContext';
 import { useRegisterShortcuts } from '../hooks/useGlobalShortcuts';
 import { pickFields } from '../utils/objectFields';
@@ -25,7 +27,9 @@ import { ALL_COLUMNS, DEFAULT_COLUMN_WIDTHS, buildDeviceColumns, DeviceColumnKey
 const MAX_BATCH_DELETE = 1000;
 
 export default function DeviceList() {
-  const { selectedRoomId } = useRoomContext();
+  const navigate = useNavigate();
+  const { selectedRoomId, setSelectedRoomId } = useRoomContext();
+  const { onSearchChange } = useViewContext();
   const { models, create: createModel, update: updateModel, remove: removeModel } = useDeviceModels();
   const { racks } = useRacks();
   const { rooms } = useRooms();
@@ -121,6 +125,21 @@ export default function DeviceList() {
   const handleModelModalClose = () => {
     setModelModalVisible(false);
   };
+
+  // B1 全局搜索「结果直达定位」：切换到设备所在机房 → 填入机柜视图搜索词（触发高亮）→ 路由跳转。
+  // RoomContext / ViewContext 均为 Layout 级 Provider，跨路由状态保留。
+  const handleLocate = useCallback((device: Device) => {
+    const rack = racks.find(r => r.id === device.rack_id);
+    if (!rack) {
+      message.warning('设备所在机柜不存在，无法定位');
+      return;
+    }
+    const roomName = rooms.find(rm => rm.id === rack.room_id)?.name;
+    setSelectedRoomId(rack.room_id);
+    onSearchChange(device.name);
+    navigate('/racks');
+    message.success(`已定位到${roomName ? `「${roomName}」` : '未分配机房'} · 机柜「${rack.name}」`);
+  }, [racks, rooms, setSelectedRoomId, onSearchChange, navigate, message]);
 
   // 单条删除（N-09 软删除；非乐观：成功后重取当前页）
   const handleDeleteDevice = useCallback((device: Device) => {
@@ -266,12 +285,13 @@ export default function DeviceList() {
     () => buildDeviceColumns(models, racks, rooms, {
       onEdit: showDeviceModal,
       onDelete: handleDeleteDevice,
+      onLocate: handleLocate,
     }, {
       search: query.search ?? '',
       sortField: query.sort_field ?? null,
       sortOrder: query.sort_order ?? null,
     }),
-    [models, racks, rooms, showDeviceModal, handleDeleteDevice, query.search, query.sort_field, query.sort_order],
+    [models, racks, rooms, showDeviceModal, handleDeleteDevice, handleLocate, query.search, query.sort_field, query.sort_order],
   );
 
   const visibleDeviceColumns = allDeviceColumns
@@ -353,7 +373,7 @@ export default function DeviceList() {
           <Input
             ref={searchInputRef}
             className="device-list-search"
-            placeholder="搜索名称 / IP / 序列号 / 资产编号..."
+            placeholder="搜索名称 / IP / 序列号 / 资产编号 / 使用人..."
             value={query.search ?? ''}
             onChange={e => setQuery({ search: e.target.value })}
           />

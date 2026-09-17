@@ -160,8 +160,17 @@ export function useRackView() {
   const searchMatchedDeviceIds = useMemo(() => {
     if (!searchQuery.trim()) return new Set<number>();
     const q = searchQuery.toLowerCase();
+    // B1 全局搜索：五字段匹配（名称/IP/序列号/资产编号/责任人），与后端搜索口径一致
     return new Set(
-      devices.filter(d => d.name.toLowerCase().includes(q)).map(d => d.id)
+      devices
+        .filter(d =>
+          d.name.toLowerCase().includes(q) ||
+          d.ip_addresses.toLowerCase().includes(q) ||
+          d.serial_no.toLowerCase().includes(q) ||
+          d.asset_no.toLowerCase().includes(q) ||
+          d.owner.toLowerCase().includes(q)
+        )
+        .map(d => d.id)
     );
   }, [searchQuery, devices]);
 

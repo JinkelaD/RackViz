@@ -4,6 +4,33 @@ RackViz 版本历史。格式参考 [Keep a Changelog](https://keepachangelog.co
 
 ## [Unreleased] — v2.1.0 开发中
 
+### B1 全局搜索
+
+- **搜索字段扩为五字段**（名称 / IP / 序列号 / 资产编号 / 责任人）：`query_devices`（台账分页）与 `list_devices`（机柜视图）搜索口径一致；LIKE 通配符转义 + `ESCAPE '\'` 红线不变。
+- **结果直达定位**：台账操作列新增「定位」按钮（未上架设备禁用）——一键切换到设备所在机房、将设备名填入机柜视图搜索词触发高亮、路由跳转 `/racks`；RoomContext / ViewContext 为 Layout 级 Provider，跨路由状态保留。
+- 机柜视图搜索高亮（`searchMatchedDeviceIds`）同步升级为五字段匹配，与后端口径一致。
+- 台账搜索框 placeholder 更新；新增 owner 命中与 `list_devices` 五字段口径单测（后端 123 测试全绿）。
+
+### C1 类型自动生成（ts-rs）
+
+- **IPC DTO 单一真相源**：Rust 侧 13 个响应/查询类型 derive `ts_rs::TS` 构建时导出至 `frontend/src/types/generated/`，`types/index.ts` 转发导出；纯前端联合类型（视图模式/排序字段/主题预设）保留手写。
+- i64 → TS `bigint` 陷阱以 `#[ts(type = "number")]` 显式覆盖（`DevicePage.total`、`DeviceQuery.offset/limit`、`BackupInfo.size_bytes`、`DbHealth.backup_count`）。
+- **防漂移**：husky pre-commit + CI `git diff --exit-code -- frontend/src/types/generated/`；迁移过程暴露并修正 4 处手写类型漂移（`include_deleted` 缺失、`sortField/sortOrder` 过窄等）。
+
+### C2 零散债清偿
+
+- `as unknown as Record` 断言清零：新增 `utils/objectFields.ts`（`pickFields`），`useRackView` / `DeviceList` 改造；`isSortField` 类型守卫替代裸 `as DeviceSortField`。
+- lint-check 白名单收缩：3 处设计为「向上抛错由调用方捕获」的 await 加 `// lint-ok` 显式标注。
+- 移除死依赖 `@tauri-apps/plugin-fs`（源码零引用）。
+
+### A1-A4 数据可靠性链
+
+- **A1 自动备份**：应用启动 + 每 6 小时静默快照（`VACUUM INTO` 一致性快照），滚动保留最近 7 份。
+- **A2 备份管理面板**：备份列表（最新在前）/ 有效性标记 / 恢复（二次确认、仅限有效备份）/ 删除（文件名白名单）。
+- **A3 恢复演练 + 文档**：README 新增「数据安全与备份」章节（自动备份路径、手动备份、恢复流程、启动自检、schema 迁移）。
+- **A4 启动自检**：`PRAGMA integrity_check`，异常时弹窗引导至备份管理面板。
+- 新增 4 个 Tauri 命令（34→38）：`auto_backup` / `list_backups` / `delete_backup` / `get_db_health`；备份模块单测 12/12 通过。
+
 ### 二维码标签打印重构（主理人 2026-09-17 拍板）
 
 - **入口迁移**：移除「机柜管理 → 设备详情」的二维码标签展示（exe 界面内显示二维码无实际意义）；功能整体迁移至**设备台账**，经表格勾选（单选/多选同一通道）触达。

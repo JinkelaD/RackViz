@@ -37,7 +37,7 @@ export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   status: 90,
   created_at: 150,
   updated_at: 150,
-  action: 90,
+  action: 120,
 };
 
 /** ISO8601(UTC) → 本地 "YYYY-MM-DD HH:mm"；非法/空值原样兜底 */
@@ -63,10 +63,12 @@ function getStatusTag(status: string) {
   return <Tag color={colors[status]}>{labels[status]}</Tag>;
 }
 
-/** 编辑/删除动作回调（由 DeviceList 提供，避免模块依赖 modal 实例） */
+/** 编辑/删除/定位动作回调（由 DeviceList 提供，避免模块依赖 modal 实例） */
 export interface DeviceActions {
   onEdit: (device: Device) => void;
   onDelete: (device: Device) => void;
+  /** B1 全局搜索：跳转机柜视图并高亮该设备（未上架设备由 UI 禁用入口） */
+  onLocate: (device: Device) => void;
 }
 
 /** 服务端排序白名单（与后端 `query_devices` 白名单一一对应；isSortField 守卫的数据源） */
