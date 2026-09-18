@@ -1,6 +1,6 @@
 [package]
 name = "rackviz"
-version = "2.0.0"
+version = "2.1.1"
 edition = "2021"
 description = "RackViz - 机房设备管理系统"
 

@@ -2,10 +2,12 @@
 
 RackViz 版本历史。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，遵循语义化版本。
 
-## [Unreleased] — v2.1.1 开发中（修复版本）
+## [Unreleased]
 
-> 版本管理拍板（主理人 2026-09-18）：**v2.1.0 = 功能升级**（C1→C2→A1-A4→B1/B2，见下一段），
-> **v2.1.1 = 修复**（本段三项）；最终交付版本号 2.1.1。
+## [2.1.1] - 2026-09-18
+
+> 版本管理拍板（主理人 2026-09-18）：**v2.1.0 功能升级 + 本段修复合并为 v2.1.1 交付**（未单独出 2.1.0 安装包）；
+> 后续新发现的 bug 修复记入 v2.1.2。四处版本号已同步 2.1.1。
 
 ### 修复：批量打印导出 PDF 仅第 1 页（`7ff9e54`）
 
@@ -37,7 +39,7 @@ RackViz 版本历史。格式参考 [Keep a Changelog](https://keepachangelog.co
 - **`tauri build` beforeBuildCommand 相对路径失败**（未修，收官前处理）：`cd ../frontend && npm run build` 在当前构建环境解析失败（"系统找不到指定的路径"），临时以手动两步（`vite build` → `cargo build --release`）等价绕过；收官打包 v2.1.1 前需修正该配置或固化手动流程。
 - **Playwright mock 陷阱**（测试基建备忘）：`addInitScript` 注入函数经 `toString()` 序列化，闭包变量丢失须内联数据；antd 6 下 Drawer 内容选择器与 Table `data-index` 行为有变化，定位一律以文本/可访问名优先。
 
-## [Unreleased] — v2.1.0（功能升级，已合入 main）
+## [2.1.0] - 2026-09-18（功能升级，随 v2.1.1 一并交付，未单独出包）
 
 ### B2 批量编辑
 
