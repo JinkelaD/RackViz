@@ -2540,6 +2540,14 @@ body {
   /* 页边距 10mm：A4 可用区域 190×277mm */
   @page { margin: 10mm; }
 
+  /* 0) 放开应用外壳的视口约束（修复 PDF 仅第 1 页）：
+     外壳为桌面布局设了 html/body { height:100%; overflow:hidden }，
+     打印上下文中 body 高度被钉死为一页且溢出裁切，第 2 页起内容全部丢失。 */
+  html, body {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
   /* 1) 应用外壳整体隐去（顶栏 #header / 主区 #main / 侧栏 #sidebar / 状态栏 .statusbar / 表格 .ant-table-wrapper 全在其中） */
   #root { display: none !important; }
 
