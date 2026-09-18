@@ -2,9 +2,9 @@
 
 RackViz 版本历史。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，遵循语义化版本。
 
-## [Unreleased]
+## [2.1.2] - 2026-09-18
 
-### 修复：设置页面元素层级显示异常（v2.1.2-1）
+### 修复：设置页面元素层级显示异常
 
 - **现象**：打开设置页后，点击任何触发弹层的元素（如「自动备份管理」、按钮 loading 提示、确认框），弹出的浮层均被设置遮罩盖住，无法交互。
 - **根因**：自绘设置遮罩 `.settings-overlay` 的 `z-index: 9999` 高于 antd 全系浮层（Modal 1000、Dropdown/Select/Tooltip ≈1030-1080）——设置页开着时 antd 弹层（portal 至 body）全部被压在遮罩之下。

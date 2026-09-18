@@ -2,9 +2,9 @@
 
 **单机 Windows 桌面应用：用拖拽可视化替代 Excel 台账，管理「哪台设备在哪个机柜的哪个 U 位」。**
 
-当前版本 **v2.0.0** · Tauri 2 · React 19 · TypeScript 7 · Ant Design 6 · SQLite
+当前版本 **v2.1.2** · Tauri 2 · React 19 · TypeScript 7 · Ant Design 6 · SQLite
 
-![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tests](https://img.shields.io/badge/tests-104%20passing-brightgreen)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen)
 
 ---
 
@@ -14,12 +14,13 @@
 |---|---|
 | 🖥️ 机柜可视化 | 逐 U 网格渲染、正/背面视图、50–200% 缩放、U 位使用率预警（>85% 红警）、设备悬浮详情 |
 | 🔄 拖拽上下架 | 资源池↔机柜↔机柜自由迁移、U 位冲突与重叠检测、多 U 设备按固有高度上架、下架确认 |
-| 📋 设备台账 | 11 列可配置、列宽拖拽、中文排序、服务端分页、四字段搜索 + 关键词高亮 |
-| 🗑️ 回收站 | 软删除 + 30 天恢复窗口、批量删除、撤销（Ctrl+Z）+ 全局快捷键 |
+| 📋 设备台账 | 11 列可配置、列宽拖拽、中文排序、服务端分页、五字段搜索（名称/编号/IP/型号/负责人）+ 关键词高亮 + 结果直达机柜视图定位 |
+| 🗑️ 回收站 | 软删除 + 30 天恢复窗口、批量删除、彻底删除（两次确认、不可恢复）、撤销（Ctrl+Z）+ 全局快捷键 |
+| ✏️ 批量编辑 | 多选统一改 机柜 / U 位 / 状态；U 位三模式（保持原位 / 清空下架 / 自动排布）；Ctrl+Z 撤销 |
 | ✅ 输入验证 | 前后端双校验：U 位区间/边界/重叠互斥、IP 格式、状态枚举；Excel 导入非法行自动跳过并警告 |
 | 📥 导入导出 | Excel 15 列映射导入（三重查重、5000 行上限、导入向导）、台账/部署图/单机柜导出、HTML 报表 |
-| 🏷️ 二维码标签 | 设备二维码 + 打印布局（7 字段契约扫码即得；打印自动放大至整页居中） |
-| 💾 备份恢复 | 一键数据库备份 / 恢复 |
+| 🏷️ 二维码标签 | 台账内标签列 + 批量打印（A4 3×8 排版，7 字段契约扫码即得） |
+| 💾 备份恢复 | 自动备份（每日首启、滚动保留 7 份）+ 备份管理面板 + 启动自检 / 一键恢复 |
 | 🌓 主题 | 暗 / 亮 / 护眼绿 / 夜间蓝四套预设，偏好持久化 |
 | ⚙️ 设置 | 日志开关（运行时生效、按天轮转保留 7 天）、一键打开日志目录 |
 
@@ -36,16 +37,16 @@
 
 ## 安装与运行
 
-**绿色单文件，无需安装**：到 [Releases](../../releases) 下载 `RackViz-v2.0.0-x64.exe`，放到任意目录**双击即用**。
+**绿色单文件，无需安装**：到 [Releases](../../releases) 下载 `RackViz-v2.1.2-x64.exe`，放到任意目录**双击即用**。
 
 - 前端资源已嵌入 exe，仅依赖系统 WebView2（Windows 10/11 自带）
 - 数据库与日志自动生成于 `%LOCALAPPDATA%\com.rackviz.app\`，不写程序目录
 - 卸载 = 删除 exe + 删除上述数据目录
 
-**SHA-256 校验**（可选，Release 附件提供 `RackViz-v2.0.0-x64.exe.sha256`）：
+**SHA-256 校验**（可选，Release 附件提供 `RackViz-v2.1.2-x64.exe.sha256`）：
 
 ```bat
-certutil -hashfile RackViz-v2.0.0-x64.exe SHA256
+certutil -hashfile RackViz-v2.1.2-x64.exe SHA256
 ```
 
 比对输出首行与 `.sha256` 文件内容一致即未被篡改。
@@ -127,12 +128,12 @@ RackViz/
 │       ├── components/        # rack/ device/ layout 组件
 │       ├── hooks/             # useApiList / useRackView / useUndoStack ...
 │       ├── contexts/          # View / Room / Theme / Undo
-│       ├── types/index.ts     # ★ 领域类型单一来源
-│       ├── tauri-api.ts       # ★ 34 个 invoke 封装（前后端契约）
+│       ├── types/index.ts     # 领域类型聚合（IPC 类型见 types/generated/，由 ts-rs 生成）
+│       ├── tauri-api.ts       # ★ 39 个 invoke 封装（前后端契约）
 │       └── themes/presets.ts  # 主题预设
 └── src-tauri/
     └── src/
-        ├── lib.rs             # ★ 34 个命令注册（41-76 行）
+        ├── lib.rs             # ★ 39 个命令注册（41-76 行）
         ├── models.rs          # 数据结构（含三态 Patch<T>）
         ├── migration.rs       # 迁移链 v0→v5（with_migration_tx）
         ├── commands/          # IPC 层：devices/racks/rooms/device_models/exports/settings/maintenance
