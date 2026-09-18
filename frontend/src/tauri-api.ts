@@ -113,6 +113,11 @@ export function restoreDevice(id: number): Promise<DeviceResp> {
   return invoke('restore_device', { id });
 }
 
+/** 彻底删除（回收站永久清除，跳过 30 天保留期）；返回被清除设备的名称 */
+export function purgeDevice(id: number): Promise<string> {
+  return invoke('purge_device', { id });
+}
+
 export function getDevice(id: number): Promise<DeviceResp | null> {
   return invoke('get_device', { id });
 }

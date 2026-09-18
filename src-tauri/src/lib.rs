@@ -43,6 +43,7 @@ pub fn run() {
             commands::devices::list_devices_all,
             commands::devices::list_deleted_devices,
             commands::devices::restore_device,
+            commands::devices::purge_device,
             commands::devices::get_device,
             commands::devices::create_device,
             commands::devices::update_device,

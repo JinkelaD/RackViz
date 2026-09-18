@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { App, Button, Drawer, Empty, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { ReloadOutlined } from '@ant-design/icons';
+import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { Device } from '../../types';
 import * as api from '../../tauri-api';
 
@@ -38,10 +38,11 @@ interface TrashDrawerProps {
  * 恢复冲突（序列号/资产编号被占用、超 30 天）时原样提示后端错误文案。
  */
 export default function TrashDrawer({ open, onClose, onRestored }: TrashDrawerProps) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(false);
   const [restoringId, setRestoringId] = useState<number | null>(null);
+  const [purgingId, setPurgingId] = useState<number | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -70,6 +71,43 @@ export default function TrashDrawer({ open, onClose, onRestored }: TrashDrawerPr
     }
   }, [message, load, onRestored]);
 
+  // 彻底删除：物理清除、跳过 30 天保留期、不可恢复。防误操作强制**两次确认**：
+  // ① 设备级确认（点明设备名与后果）→ ② 最终警告（红色危险按钮）后才执行。
+  const handlePurge = useCallback((device: Device) => {
+    modal.confirm({
+      title: `确认彻底删除「${device.name}」？`,
+      content: '该设备将从数据库中物理清除，跳过 30 天保留期，删除后无法恢复。',
+      okText: '继续删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => {
+        return new Promise<void>((resolve) => {
+          modal.confirm({
+            title: '最终确认：永久删除',
+            content: `「${device.name}」的数据将被永久清除且无法撤销。确定继续吗？`,
+            okText: '永久删除',
+            okType: 'danger',
+            cancelText: '再想想',
+            onOk: async () => {
+              setPurgingId(device.id);
+              try {
+                await api.purgeDevice(device.id);
+                message.success(`已彻底删除设备「${device.name}」`);
+                load();
+                onRestored();
+              } catch (err) {
+                message.error(`彻底删除失败：${api.errorMessage(err)}`);
+              } finally {
+                setPurgingId(null);
+              }
+            },
+            afterClose: resolve,
+          });
+        });
+      },
+    });
+  }, [modal, message, load, onRestored]);
+
   const columns: ColumnsType<Device> = [
     { title: '设备名称', dataIndex: 'name', key: 'name', render: (v: string) => v || '-', ellipsis: true },
     { title: '序列号', dataIndex: 'serial_no', key: 'serial_no', render: (v: string) => v || '-', ellipsis: true },
@@ -94,23 +132,38 @@ export default function TrashDrawer({ open, onClose, onRestored }: TrashDrawerPr
     {
       title: '操作',
       key: 'action',
-      width: 96,
+      width: 170,
       render: (_: unknown, record: Device) => {
         const days = remainingDays(record.deleted_at);
         const expired = days !== null && days <= 0;
-        const btn = (
+        const busy = restoringId !== null || purgingId !== null;
+        const restoreBtn = (
           <Button
             size="small"
             loading={restoringId === record.id}
-            disabled={expired || restoringId !== null}
+            disabled={expired || busy}
             onClick={() => handleRestore(record)}
           >
             恢复
           </Button>
         );
-        return expired
-          ? <Tooltip title="已超过 30 天恢复期，不可恢复">{btn}</Tooltip>
-          : btn;
+        return (
+          <span style={{ display: 'inline-flex', gap: 6 }}>
+            {expired
+              ? <Tooltip title="已超过 30 天恢复期，不可恢复">{restoreBtn}</Tooltip>
+              : restoreBtn}
+            <Button
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              loading={purgingId === record.id}
+              disabled={busy}
+              onClick={() => handlePurge(record)}
+            >
+              彻底删除
+            </Button>
+          </span>
+        );
       },
     },
   ];

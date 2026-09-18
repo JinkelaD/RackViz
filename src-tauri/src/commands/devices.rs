@@ -92,6 +92,28 @@ pub fn delete_device(state: State<DbState>, id: i32) -> Result<bool, AppError> {
     Ok(result)
 }
 
+/// 彻底删除（回收站永久清除，跳过 30 天保留期）：仅允许已软删记录物理 DELETE。
+///
+/// 返回被清除设备的名称（供前端提示）；设备不存在或未软删时报错。
+/// 防误操作：前端强制两次确认；SQL 侧 `deleted_at IS NOT NULL` 兜底（active 设备不可能被命中）。
+#[tauri::command]
+pub fn purge_device(state: State<DbState>, id: i32) -> Result<String, AppError> {
+    let conn = state.conn()?;
+    let dev = db::devices::get_device(&conn, id)?
+        .ok_or_else(|| AppError::not_found("设备"))?;
+    if dev.deleted_at.is_none() {
+        return Err(AppError::validation("该设备不在回收站中，无法彻底删除"));
+    }
+    let purged = db::with_transaction(&conn, |c| db::devices::purge_device(c, id))?;
+    if purged {
+        log::info!("[操作] 彻底删除设备(硬删): id={}, name={}", dev.id, dev.name);
+    } else {
+        log::warn!("[操作] 彻底删除设备失败(未找到或未软删): id={}", id);
+        return Err(AppError::not_found("设备"));
+    }
+    Ok(dev.name)
+}
+
 /// 批量软删除设备（N-20）：单次 IPC；去重 + 上限校验；同事务循环复用单条软删。
 #[tauri::command]
 pub fn delete_devices(state: State<DbState>, ids: Vec<i32>) -> Result<DeleteBatchResult, AppError> {

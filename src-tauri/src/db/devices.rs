@@ -658,6 +658,18 @@ pub fn delete_device(conn: &Connection, id: i32) -> Result<bool, AppError> {
     soft_delete_device(conn, id)
 }
 
+/// 彻底删除（回收站永久清除）：**仅允许已软删记录**物理 `DELETE`。
+///
+/// 防线：`WHERE deleted_at IS NOT NULL`——active 设备（未软删）不可能被该语句命中，
+/// 即便调用方漏检也只会返回 `false` 而非误删。跳过 30 天保留期由前端两次确认把关。
+pub fn purge_device(conn: &Connection, id: i32) -> Result<bool, AppError> {
+    let affected = conn.execute(
+        "DELETE FROM devices WHERE id = ?1 AND deleted_at IS NOT NULL",
+        params![id],
+    )?;
+    Ok(affected > 0)
+}
+
 /// 批量软删除（N-20）：在**同一事务**内循环复用单条软删（§8-13，禁止 `DELETE ... IN`）。
 ///
 /// 返回 `(deleted 成功数, not_found 不存在 / 已被软删的 id 列表)`。
@@ -1191,6 +1203,39 @@ mod tests {
         assert!(!soft_delete_device(&conn, dev.id).unwrap());
         // 不存在的 id
         assert!(!soft_delete_device(&conn, 9999).unwrap());
+    }
+
+    // ==================== 回收站彻底删除（purge） ====================
+
+    /// purge：软删后物理删除——主列表与回收站均不可见，行彻底消失。
+    #[test]
+    fn test_purge_device_removes_row_physically() {
+        let conn = setup_db();
+        let dev = create_test_device(&conn, "PurgeMe", None);
+        soft_delete_device(&conn, dev.id).unwrap();
+
+        assert!(purge_device(&conn, dev.id).unwrap());
+        // 物理消失：get / 回收站 / 同序列号重建全部通过
+        assert!(get_device(&conn, dev.id).unwrap().is_none());
+        assert!(list_deleted_devices(&conn, None).unwrap().is_empty());
+        let recreated = insert_device(&conn, &DeviceCreate {
+            name: "Recreated".into(),
+            serial_no: Some("SN-PURGE".into()),
+            ..Default::default()
+        });
+        assert!(recreated.is_ok(), "purge 后同序列号可重建（行已物理删除）");
+    }
+
+    /// purge 防线：active（未软删）设备拒绝物理删除；不存在 id 返回 false。
+    #[test]
+    fn test_purge_device_rejects_active_or_missing() {
+        let conn = setup_db();
+        let dev = create_test_device(&conn, "Active", None);
+        // 未软删 → WHERE deleted_at IS NOT NULL 不命中 → false（行仍在）
+        assert!(!purge_device(&conn, dev.id).unwrap());
+        assert!(get_device(&conn, dev.id).unwrap().is_some());
+        // 不存在的 id
+        assert!(!purge_device(&conn, 9999).unwrap());
     }
 
     #[test]
