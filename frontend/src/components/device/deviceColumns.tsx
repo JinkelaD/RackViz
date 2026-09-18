@@ -1,5 +1,5 @@
-import { Tag, Space, Button } from 'antd';
-import { EditOutlined } from '@ant-design/icons';
+import { Tag, Space, Button, Tooltip } from 'antd';
+import { AimOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { Device, DeviceModel, Rack, Room, DeviceSortField } from '../../types';
 import HighlightText from './HighlightText';
@@ -179,9 +179,22 @@ export function buildDeviceColumns(
     {
       title: '操作', key: 'action', fixed: 'right' as const,
       render: (_: unknown, record: Device) => (
-        <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => actions.onEdit(record)}>编辑</Button>
-          <Button size="small" danger onClick={() => actions.onDelete(record)}>删除</Button>
+        <Space size={4}>
+          <Tooltip title={record.rack_id == null ? '未上架，无法定位' : '在机柜视图中定位'}>
+            <Button
+              size="small"
+              icon={<AimOutlined />}
+              aria-label="定位"
+              disabled={record.rack_id == null}
+              onClick={() => actions.onLocate(record)}
+            />
+          </Tooltip>
+          <Tooltip title="编辑">
+            <Button size="small" icon={<EditOutlined />} aria-label="编辑" onClick={() => actions.onEdit(record)} />
+          </Tooltip>
+          <Tooltip title="删除">
+            <Button size="small" danger icon={<DeleteOutlined />} aria-label="删除" onClick={() => actions.onDelete(record)} />
+          </Tooltip>
         </Space>
       ),
     },
