@@ -29,6 +29,14 @@ RackViz 版本历史。格式参考 [Keep a Changelog](https://keepachangelog.co
 - **位置与触发**：设备台账表格最右「操作」列（固定列），瞄准镜图标 = 定位；悬停显示「在机柜视图中定位」，点击后跳转机柜视图并高亮该设备。
 - **验证**：Playwright——在架行定位可用、未上架行禁用、Tooltip 正确。
 
+### 开发过程问题记录（不影响数据，供复盘）
+
+- **ts-rs 导出路径错位**（C1，已修）：ts-rs 10 的 `export_to` 相对 `<CARGO_MANIFEST_DIR>` 解析，首跑产物落到 `src-tauri/frontend/...`；路径改为 `../../frontend/` 并清除错位目录。
+- **i64 → TS `bigint`**（C1，已修）：ts-rs 默认把 Rust `i64` 映射为 TS `bigint`，5 个字段以 `#[ts(type = "number")]` 显式覆盖（见 v2.1.0 段 C1）。
+- **同文件并行编辑静默丢失**（B1→v2.1.1，已修）：对 `deviceColumns.tsx` 的一次多次并发编辑丢失操作列渲染代码（见上「定位按钮缺失」），流程上已改为同文件编辑强制串行。
+- **`tauri build` beforeBuildCommand 相对路径失败**（未修，收官前处理）：`cd ../frontend && npm run build` 在当前构建环境解析失败（"系统找不到指定的路径"），临时以手动两步（`vite build` → `cargo build --release`）等价绕过；收官打包 v2.1.1 前需修正该配置或固化手动流程。
+- **Playwright mock 陷阱**（测试基建备忘）：`addInitScript` 注入函数经 `toString()` 序列化，闭包变量丢失须内联数据；antd 6 下 Drawer 内容选择器与 Table `data-index` 行为有变化，定位一律以文本/可访问名优先。
+
 ## [Unreleased] — v2.1.0（功能升级，已合入 main）
 
 ### B2 批量编辑
