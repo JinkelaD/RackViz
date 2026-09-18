@@ -2188,7 +2188,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 9999;
+  /* v2.1.2 修复：9999 高于 antd 全系浮层（Modal 1000 / Dropdown / Tooltip ≈1030-1080），
+     设置页内点击任何触发 antd 弹层的元素都会被本遮罩盖住；降为 900——
+     仍压过自绘层（header 100 / .modal-overlay 200），让位于 antd 层系。 */
+  z-index: 900;
   backdrop-filter: blur(4px);
 }
 .settings-modal {

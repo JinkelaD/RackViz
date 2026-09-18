@@ -4,6 +4,13 @@ RackViz 版本历史。格式参考 [Keep a Changelog](https://keepachangelog.co
 
 ## [Unreleased]
 
+### 修复：设置页面元素层级显示异常（v2.1.2-1）
+
+- **现象**：打开设置页后，点击任何触发弹层的元素（如「自动备份管理」、按钮 loading 提示、确认框），弹出的浮层均被设置遮罩盖住，无法交互。
+- **根因**：自绘设置遮罩 `.settings-overlay` 的 `z-index: 9999` 高于 antd 全系浮层（Modal 1000、Dropdown/Select/Tooltip ≈1030-1080）——设置页开着时 antd 弹层（portal 至 body）全部被压在遮罩之下。
+- **修复**：z-index 降为 `900`——仍压过应用自绘层（header 100 / 通用 `.modal-overlay` 200），让位于 antd 层系（≥1000）；全库排查确认仅此一处 z-index 越过 antd 层系。
+- **验证**：Playwright——设置页内点「自动备份管理」，antd Modal 中心点 `elementFromPoint` 命中其内部元素（可交互），overlay z-index = 900。
+
 ## [2.1.1] - 2026-09-18
 
 > 版本管理拍板（主理人 2026-09-18）：**v2.1.0 功能升级 + 本段修复合并为 v2.1.1 交付**（未单独出 2.1.0 安装包）；
