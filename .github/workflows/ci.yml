@@ -41,6 +41,12 @@ jobs:
         working-directory: frontend
         run: npm run lint:offline
 
+      # tauri::generate_context!() 宏要求 frontendDist 目录存在，
+      # CI checkout 后 frontend/dist 为空（已被 .gitignore 排除），必须先 build 前端
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
       - name: cargo check
         working-directory: src-tauri
         run: cargo check --quiet
